@@ -2,6 +2,11 @@
 
 All notable user-facing changes to `pi-chrome`.
 
+## 0.15.26 — 2026-05-16
+
+- **Documentation accuracy.** README, FAQ, examples, comparison, and test-suite docs now describe the 41-challenge suite, gate buckets, strict-CSP fallback, and current human-vs-extension limitations.
+- **Published benchmark assets.** The npm package now includes `test-suite/` so the documented benchmark pages are available from installed packages, not only from the repository checkout.
+
 ## 0.15.25 — 2026-05-16
 
 - **Reload after older installs.** `/reload` now recovers from stale singleton state left by pi-chrome 0.15.19 and earlier instead of skipping the freshly loaded extension.

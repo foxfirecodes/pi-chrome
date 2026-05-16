@@ -14,9 +14,9 @@ By default no — extensions need explicit "Allow in incognito" permission. Togg
 
 ## Will sites detect that I'm automating?
 
-Interactive controls use Chrome's real input layer via CDP: pointer paths are humanized, key cadence has variance, and normal user-activation gates are satisfied. Some detectors check for the `chrome.debugger` API attached and Chrome will show the "Chrome is being debugged" banner.
+Interactive controls use Chrome's real input layer via CDP, so normal user-activation gates are satisfied and input is closer to real browser use than DOM-dispatched events. pi-chrome also shapes pointer/keyboard/scroll behavior, but this is not a guarantee of undetectability. Some detectors check for the `chrome.debugger` API attached, and Chrome will show the "Chrome is being debugged" banner.
 
-The [`test-suite/`](../test-suite) grades browser-control behavior against common detection signals.
+The [`test-suite/`](../test-suite) grades browser-control behavior against common detection signals. Its `quality` bucket is adversarial signal, not a blanket promise that every site will treat automation as human.
 
 ## Why do I see a banner saying "Pi Chrome Connector started debugging this browser"?
 
@@ -48,6 +48,10 @@ pi-chrome ships as an unpacked extension so the source and broad browser permiss
 ## Can I script it without Pi?
 
 The Pi-facing tools are thin wrappers around an HTTP bridge at `127.0.0.1:17318`. You could call it directly from any process, but the API is internal and may change. If you need a stable scripting interface, file an issue and we'll consider stabilizing.
+
+## What can humans do that pi-chrome cannot?
+
+pi-chrome controls web pages through Chrome extension APIs, page inspection, screenshots, and browser input. It is not full OS-level human control. Known gaps include native Chrome/OS dialogs (print/save-as, some permission bubbles, password-manager prompts), arbitrary OS app interaction, visual CAPTCHA challenges, hardware-backed auth (passkeys/security keys/biometrics), rich multi-touch/pinch/stylus gestures, and DOM inspection inside cross-origin iframes. Some of these can still be handled with screenshot + coordinate input or user assistance, but they are not first-class deterministic workflows.
 
 ## Does `chrome_evaluate` work on strict-CSP pages?
 

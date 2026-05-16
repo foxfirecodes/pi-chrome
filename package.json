@@ -1,6 +1,6 @@
 {
 	"name": "pi-chrome",
-	"version": "0.15.25",
+	"version": "0.15.26",
 	"scripts": {
 		"version": "node scripts/sync-manifest-version.js",
 		"prepublishOnly": "node scripts/sync-manifest-version.js"
@@ -52,6 +52,7 @@
 	"files": [
 		"extensions",
 		"docs",
+		"test-suite",
 		"README.md",
 		"CHANGELOG.md",
 		"CONTRIBUTING.md",

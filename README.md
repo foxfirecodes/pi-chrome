@@ -149,6 +149,10 @@ Agents can verify page state immediately instead of blindly retrying.
 
 Each tool is documented inline in Pi — agents see the parameters and gotchas (Chrome input, CSP limits, file upload behavior) without trial-and-error.
 
+### Known limits vs. human Chrome use
+
+pi-chrome is strongest on web-page workflows exposed through DOM, screenshots, tabs, and Chrome input. It is not a full human/OS substitute. Current limitations include native Chrome/OS surfaces (print/save dialogs, permission bubbles, password-manager prompts), cross-origin iframe DOM access, rich multitouch/pinch/stylus gestures, visual CAPTCHA/bot challenges, hardware-backed auth (passkeys/security keys/biometrics), and arbitrary OS app interaction. For strict-CSP pages, use screenshot + coordinate input when `chrome_snapshot`/`chrome_evaluate` are blocked.
+
 ---
 
 ## Click & input behavior
@@ -213,9 +217,13 @@ Multiple Pi sessions (planner / worker / audit) can all drive the same Chrome at
 
 ## Built-in benchmark suite
 
-[`test-suite/`](./test-suite) is a benchmark for **any** browser-control agent (not just pi-chrome). It includes **38 primitive challenges** plus **4 hermetic BrowserGym-style long-horizon tasks**.
+[`test-suite/`](./test-suite) is a benchmark for **any** browser-control agent (not just pi-chrome). It includes **41 primitive challenges** plus **4 hermetic BrowserGym-style long-horizon tasks**.
 
-Scoring tracks expected outcomes per challenge rather than raw PASS count, so tools are judged against their declared browser-control capability.
+Scoring tracks expected outcomes per challenge rather than raw PASS count, so tools are judged against their declared browser-control capability. Unit challenges are split into gate buckets:
+
+- `core` — expected release blockers for normal trusted-mode browser control.
+- `conditional` — capability/environment gated (clipboard, touch, dialogs, native UI, etc.).
+- `quality` — adversarial humanization/fingerprint signals; report trends, don't block general release by default.
 
 Each challenge exposes `window.__verdict` / `window.__reason` / `window.__events` and a manifest entry with expected results per mode.
 
@@ -224,7 +232,7 @@ cd test-suite && python3 -m http.server 8765
 # open http://127.0.0.1:8765/ in the Chrome window pi-chrome controls
 ```
 
-Categories: `real-input`, `pointer-humanization`, `keyboard`, `activation-gates`, `scroll`, `drag-drop`, `clipboard`, `native-controls`, `frameworks`, `editing`, `dom-complexity`, `frames`, `files`, `observability`, `fingerprint`, `agent-safety`.
+Categories include: `trusted-input`, `pointer-humanization`, `keyboard`, `focus-keyboard`, `activation-gates`, `scroll`, `drag-drop`, `clipboard`, `native-controls`, `frameworks`, `editing`, `dom-complexity`, `frames`, `files`, `observability`, `csp`, `lazy-loading`, `dialogs`, `popups`, `spa-routing`, `fingerprint`, and `agent-safety`.
 
 If you build a competing tool, please open a PR with your scores. We benchmark in public.
 
@@ -247,7 +255,8 @@ There is no network exposure in the default configuration; the bridge binds to l
 `pi-chrome` is actively shipped. Things on the near roadmap:
 
 - More observability tools (DOM mutation streams, performance traces)
-- First-class iframe + Shadow-DOM uid stability across snapshots
+- First-class cross-origin iframe + Shadow-DOM uid stability across snapshots
+- Native-browser surface coverage where extension APIs allow it (downloads, permissions, context menus)
 - Web Push & service worker introspection
 - Recorder mode that emits agent prompts from your own clicks
 

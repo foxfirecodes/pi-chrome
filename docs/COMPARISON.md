@@ -134,7 +134,7 @@ If your threat model excludes extensions with broad permissions, neither approac
 
 ## Public benchmarks worth knowing (for axis 2 / axis 3 comparison)
 
-Pi-chrome itself ships a benchmark suite ([`../test-suite/`](../test-suite)) of **38 primitive challenges** plus **4 hermetic BrowserGym-style long-horizon tasks** covering real input, pointer humanization, keyboard fidelity, drag/drop, Shadow DOM, file uploads, network observability, fingerprint leaks, and agent-safety honeypots. Scoring tracks expected outcomes per challenge instead of raw PASS count. That's **driver-level** grading.
+Pi-chrome itself ships a benchmark suite ([`../test-suite/`](../test-suite)) of **41 primitive challenges** plus **4 hermetic BrowserGym-style long-horizon tasks** covering trusted input, pointer humanization, keyboard fidelity, drag/drop, Shadow DOM, iframes, file uploads, strict-CSP screenshot fallback, dynamic waits, tab lifecycle, network observability, fingerprint leaks, and agent-safety honeypots. Scoring tracks expected outcomes per challenge instead of raw PASS count, with `core`, `conditional`, and `quality` gate buckets. That's **driver-level** grading.
 
 For **agent-level** comparison (axis 2), the public benchmarks worth citing:
 
@@ -156,7 +156,7 @@ Cite live leaderboards rather than hard-coded numbers; agent scores shift monthl
 
 ## Reproducing pi-chrome's driver-level claims
 
-Run [`../test-suite/`](../test-suite) against any browser-control tool. Each challenge exposes `window.__verdict` / `window.__reason` / `window.__events`, so any tool (Playwright, Puppeteer, Selenium, Stagehand, pi-chrome) can grade itself deterministically.
+Run [`../test-suite/`](../test-suite) against any browser-control tool. Each challenge exposes `window.__verdict` / `window.__reason` / `window.__events`, so any tool (Playwright, Puppeteer, Selenium, Stagehand, pi-chrome) can grade itself deterministically. Headline release scoring should use the `core` gate; `conditional` depends on declared environment capabilities, and `quality` tracks adversarial/humanization regressions.
 
 ```bash
 cd test-suite && python3 -m http.server 8765
