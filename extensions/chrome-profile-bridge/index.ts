@@ -486,6 +486,14 @@ export default function (pi: ExtensionAPI): void {
 		}
 	};
 
+	const updateChromeStatus = (ctx: ExtensionContext): void => {
+		if (chromeControlAuthorized()) {
+			ctx.ui.setStatus("chrome", ctx.ui.theme.fg("success", "●") + " Chrome Bridge");
+		} else {
+			ctx.ui.setStatus("chrome", undefined);
+		}
+	};
+
 	const authorizedBridgeSend = (action: string, params: Record<string, unknown>, timeoutMs = DEFAULT_TIMEOUT_MS, signal?: AbortSignal): Promise<unknown> => {
 		requireChromeControlAuthorized();
 		return bridge.send(action, params, timeoutMs, signal);
@@ -507,14 +515,7 @@ export default function (pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		await bridge.start();
-		const status = bridge.status();
-		ctx.ui.setStatus("chrome", `Chrome bridge :${DEFAULT_PORT}`);
-		ctx.ui.notify(
-			status.mode === "client"
-				? `pi-chrome connected (sharing the Chrome connection an earlier pi session opened). Run /chrome authorize before using chrome_* tools.`
-				: `pi-chrome is ready and waiting for the Chrome companion to connect. Run /chrome onboard to install it, then /chrome authorize to allow chrome_* tools.`,
-			"info",
-		);
+		updateChromeStatus(ctx);
 	});
 
 	pi.on("session_shutdown", () => {
@@ -650,6 +651,7 @@ Usage rules:
 		}
 		chromeAuthorizedUntil = until;
 		ctx.ui.notify(`Chrome control authorized for ${label}.`, "info");
+		updateChromeStatus(ctx);
 	};
 
 	const parseAuthorizeArg = (arg: string): { label: string; until: number | "indefinite" } | undefined => {
@@ -672,6 +674,7 @@ Usage rules:
 	const revokeHandler = (ctx: ExtensionContext) => {
 		chromeAuthorizedUntil = undefined;
 		ctx.ui.notify("Chrome control locked. Run /chrome authorize to allow chrome_* tools again.", "info");
+		updateChromeStatus(ctx);
 	};
 
 	const onboardHandler = async (ctx: ExtensionContext) => {
