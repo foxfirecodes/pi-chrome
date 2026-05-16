@@ -18,7 +18,7 @@
     ],
     "grader": {
       "type": "inPageProgrammatic",
-      "expression": "JSON.stringify(window.__taskValidation || {v:window.__taskVerdict,r:window.__taskReason})",
+      "expression": "window.__taskVerdict || (window.__taskValidation?.done ? \"PASS\" : \"FAIL\")",
       "passValue": "PASS"
     },
     "browserGymLike": {
@@ -122,7 +122,7 @@
     ],
     "grader": {
       "type": "inPageProgrammatic",
-      "expression": "JSON.stringify(window.__taskValidation || {v:window.__taskVerdict,r:window.__taskReason})",
+      "expression": "window.__taskVerdict || (window.__taskValidation?.done ? \"PASS\" : \"FAIL\")",
       "passValue": "PASS"
     },
     "browserGymLike": {
@@ -227,7 +227,7 @@
     ],
     "grader": {
       "type": "inPageProgrammatic",
-      "expression": "JSON.stringify(window.__taskValidation || {v:window.__taskVerdict,r:window.__taskReason})",
+      "expression": "window.__taskVerdict || (window.__taskValidation?.done ? \"PASS\" : \"FAIL\")",
       "passValue": "PASS"
     },
     "browserGymLike": {
@@ -330,7 +330,7 @@
     ],
     "grader": {
       "type": "inPageProgrammatic",
-      "expression": "JSON.stringify(window.__taskValidation || {v:window.__taskVerdict,r:window.__taskReason})",
+      "expression": "window.__taskVerdict || (window.__taskValidation?.done ? \"PASS\" : \"FAIL\")",
       "passValue": "PASS"
     },
     "browserGymLike": {

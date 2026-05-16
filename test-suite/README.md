@@ -26,10 +26,11 @@ Each challenge page exposes:
 - `window.__events` — raw event log for forensics
 
 `manifest.json` is the source of truth for unit-challenge metadata: category,
-goal, expected result per mode, prerequisites, flake risk, manual baseline
-status, and canonical tool recipe. `manifest.schema.json` documents the manifest
-shape. Recipes express tool intent; runners may need to adapt descriptive
-selectors (e.g. shadow/iframe notation) and expand path placeholders like `$PWD`.
+gate bucket, goal, expected result per mode, prerequisites, flake risk, manual
+baseline status, and canonical tool recipe. `manifest.schema.json` documents the
+manifest shape. Recipes express tool intent; runners may need to adapt
+descriptive selectors (e.g. shadow/iframe notation), dynamic tab ids, and expand
+path placeholders like `$PWD`.
 
 `task-manifest.json` is the source of truth for long-horizon tasks: BrowserGym-style
 `taskId`, seed, viewport, goal object, difficulty tier, max steps, declared
@@ -55,6 +56,16 @@ Expected values in `manifest.json`:
 
 Manual baselines are tracked separately with `manualBaseline`. `unverified`
 means the manual expectation is a target, not a recorded contract.
+
+## Gate buckets
+
+Each unit challenge has a `gate` field:
+
+- `core` — required release blocker for normal trusted-mode pi-chrome shipping.
+- `conditional` — blocks only when declared prerequisites/capabilities are present
+  (clipboard, touch, dialogs, native UI, etc.).
+- `quality` — adversarial humanization/fingerprint signal. Track regressions, but
+  do not block general ship without an explicit product decision.
 
 ## Recommended unit-challenge agent flow
 
@@ -114,6 +125,8 @@ means the manual expectation is a target, not a recorded contract.
 - `dom-complexity` / `frames` — Shadow DOM and iframe targeting.
 - `files` — file attachment to `<input type=file>`.
 - `observability` — console/network capture tools.
+- `csp` — strict Content Security Policy fallback where eval/snapshot may fail.
+- `lazy-loading` — dynamic DOM readiness and wait behavior.
 - `fingerprint` — environment and stack fingerprint probes.
 - `agent-safety` — hidden honeypots and safe target selection.
 
@@ -154,6 +167,14 @@ The dashboard renders this from `manifest.json`. In brief:
 31. file upload
 32. keyboard Tab navigation
 33. network/console capture
+34. dialog handling
+35. target blank popup
+36. modal focus trap
+37. autocomplete combobox
+38. SPA route change
+39. strict CSP screenshot/coordinate fallback
+40. dynamic wait/readiness
+41. explicit tab lifecycle
 
 ## Design notes
 

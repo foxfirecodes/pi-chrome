@@ -29,7 +29,7 @@
 <table id="tbl">
   <thead>
     <tr>
-      <th>id</th><th>category</th><th>verdict</th><th>expected</th><th>baseline</th><th>risk</th><th>goal / notes</th><th>open</th>
+      <th>id</th><th>gate</th><th>category</th><th>verdict</th><th>expected</th><th>baseline</th><th>risk</th><th>goal / notes</th><th>open</th>
     </tr>
   </thead>
   <tbody></tbody>
@@ -80,6 +80,7 @@ function report() {
     return {
       id: m.id,
       category: m.category,
+      gate: m.gate ?? "core",
       file: m.file,
       verdict: v?.verdict ?? "PENDING",
       reason: v?.reason ?? [],
@@ -98,19 +99,25 @@ function paint() {
   const rows = report();
   const counts = rows.reduce((acc, r) => (acc[r.verdict] = (acc[r.verdict] || 0) + 1, acc), {});
   const mismatches = rows.filter(r => r.verdict !== "PENDING" && r.expected !== "CONDITIONAL" && r.expected !== "—" && r.verdict !== r.expected).length;
+  const coreMismatches = rows.filter(r => (r.gate ?? "core") === "core" && r.verdict !== "PENDING" && r.expected !== "CONDITIONAL" && r.expected !== "—" && r.verdict !== r.expected).length;
+  const gates = rows.reduce((acc, r) => (acc[r.gate ?? "core"] = (acc[r.gate ?? "core"] || 0) + 1, acc), {});
   document.getElementById("summary").innerHTML = `
     <span class="pill pass">PASS ${counts.PASS || 0}</span>
     <span class="pill fail">FAIL ${counts.FAIL || 0}</span>
     <span class="pill skip">SKIP ${counts.SKIP || 0}</span>
     <span class="pill warn">WARN ${counts.WARN || 0}</span>
     <span class="pill pending">PENDING ${counts.PENDING || 0}</span>
-    <span class="pill ${mismatches ? "fail" : "pass"}">unexpected ${mismatches}</span>
+    <span class="pill ${coreMismatches ? "fail" : "pass"}">core unexpected ${coreMismatches}</span>
+    <span class="pill ${mismatches ? "fail" : "pass"}">all unexpected ${mismatches}</span>
+    <span class="pill expected">core ${gates.core || 0}</span>
+    <span class="pill expected">conditional ${gates.conditional || 0}</span>
+    <span class="pill expected">quality ${gates.quality || 0}</span>
   `;
   for (const m of manifest) {
     const v = verdictFor(m.id);
     const verdict = v?.verdict ?? "PENDING";
     const expected = m.expected?.[mode] ?? "—";
-    const hay = JSON.stringify({ id:m.id, category:m.category, verdict, expected, goal:m.goal, notes:m.notes }).toLowerCase();
+    const hay = JSON.stringify({ id:m.id, gate:m.gate, category:m.category, verdict, expected, goal:m.goal, notes:m.notes }).toLowerCase();
     if (q && !hay.includes(q)) continue;
     const tr = document.createElement("tr");
     tr.className = expectedClass(verdict, expected);
@@ -118,6 +125,7 @@ function paint() {
     const notes = [...(m.prerequisites || []).map(x => "pre: " + x), ...(m.notes || [])].join("; ");
     tr.innerHTML = `
       <td><code>${m.id}</code></td>
+      <td><span class="pill expected">${m.gate || "core"}</span></td>
       <td>${m.category || "—"}</td>
       <td><span class="pill ${classFor(verdict)}">${verdict}</span><div class="reason">${escapeHtml(reason)}</div></td>
       <td><span class="pill expected">${expected}</span></td>

@@ -2,6 +2,11 @@
 
 All notable user-facing changes to `pi-chrome`.
 
+## 0.15.25 — 2026-05-16
+
+- **Reload after older installs.** `/reload` now recovers from stale singleton state left by pi-chrome 0.15.19 and earlier instead of skipping the freshly loaded extension.
+- **Test suite coverage.** Added gate buckets plus strict-CSP fallback, dynamic wait readiness, and explicit tab lifecycle challenges.
+
 ## 0.15.24 — 2026-05-16
 
 - **Unload Chrome tools on lock.** `chrome_*` tools now deactivate when `/chrome revoke` runs or timed authorization expires, keeping the prompt/tool list small after Chrome control locks again.

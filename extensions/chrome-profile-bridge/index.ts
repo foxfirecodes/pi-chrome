@@ -470,17 +470,21 @@ function StringEnum<T extends readonly [string, ...string[]]>(values: T) {
 
 export default function (pi: ExtensionAPI): void {
 	const instanceToken = Symbol("pi-chrome-instance");
+	const currentRoot = extensionRoot();
 	const globalState = globalThis as typeof globalThis & {
-		[PI_CHROME_GLOBAL_KEY]?: { version: string; root: string; token: symbol };
+		[PI_CHROME_GLOBAL_KEY]?: { version: string; root: string; token?: symbol };
 	};
 	const alreadyLoaded = globalState[PI_CHROME_GLOBAL_KEY];
-	if (alreadyLoaded) {
+	if (alreadyLoaded?.token || (alreadyLoaded && alreadyLoaded.root !== currentRoot)) {
 		console.warn(
-			`pi-chrome already loaded from ${alreadyLoaded.root} (v${alreadyLoaded.version}); skipping duplicate from ${extensionRoot()}.`,
+			`pi-chrome already loaded from ${alreadyLoaded.root} (v${alreadyLoaded.version}); skipping duplicate from ${currentRoot}.`,
 		);
 		return;
 	}
-	globalState[PI_CHROME_GLOBAL_KEY] = { version: PI_CHROME_VERSION, root: extensionRoot(), token: instanceToken };
+	// pi-chrome <=0.15.19 set the singleton flag but did not clear it on reload.
+	// If the stale flag points at this same extension root, replace it instead of
+	// skipping the freshly reloaded extension.
+	globalState[PI_CHROME_GLOBAL_KEY] = { version: PI_CHROME_VERSION, root: currentRoot, token: instanceToken };
 
 	const bridge = new ChromeProfileBridge(DEFAULT_HOST, DEFAULT_PORT);
 	let backgroundDefault = false;

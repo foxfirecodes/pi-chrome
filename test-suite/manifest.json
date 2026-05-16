@@ -27,7 +27,8 @@
     "tags": [
       "trusted-input"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "core"
   },
   {
     "id": "is-trusted-keyboard",
@@ -55,7 +56,8 @@
     "tags": [
       "trusted-input"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "core"
   },
   {
     "id": "webdriver-flag",
@@ -84,7 +86,8 @@
     "tags": [
       "fingerprint"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "core"
   },
   {
     "id": "mouse-entropy",
@@ -110,7 +113,8 @@
     "tags": [
       "pointer-humanization"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "quality"
   },
   {
     "id": "event-timing",
@@ -153,7 +157,8 @@
     "thresholds": {},
     "notes": [
       "Timing thresholds can be tuned via ?threshold.<name>=value for slower CI or high-polling devices."
-    ]
+    ],
+    "gate": "core"
   },
   {
     "id": "click-coordinates",
@@ -203,7 +208,8 @@
     "tags": [
       "pointer-humanization"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "quality"
   },
   {
     "id": "pointer-properties",
@@ -229,7 +235,8 @@
     "tags": [
       "pointer-humanization"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "quality"
   },
   {
     "id": "keyboard-cadence",
@@ -260,7 +267,8 @@
     "thresholds": {},
     "notes": [
       "Timing thresholds can be tuned via ?threshold.<name>=value for slower CI or high-polling devices."
-    ]
+    ],
+    "gate": "quality"
   },
   {
     "id": "composition-input",
@@ -287,7 +295,8 @@
     "tags": [
       "keyboard"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "core"
   },
   {
     "id": "user-activation",
@@ -320,7 +329,8 @@
     "tags": [
       "activation-gates"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "conditional"
   },
   {
     "id": "honeypot",
@@ -353,7 +363,8 @@
     "tags": [
       "agent-safety"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "core"
   },
   {
     "id": "fingerprint",
@@ -383,7 +394,8 @@
     "tags": [
       "fingerprint"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "quality"
   },
   {
     "id": "focus-order",
@@ -412,7 +424,8 @@
     "tags": [
       "focus-keyboard"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "quality"
   },
   {
     "id": "wheel-scroll",
@@ -439,7 +452,8 @@
     "tags": [
       "scroll"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "core"
   },
   {
     "id": "drag-drop-datatransfer",
@@ -470,7 +484,8 @@
     "tags": [
       "drag-drop"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "conditional"
   },
   {
     "id": "contenteditable-selection",
@@ -497,7 +512,8 @@
     "tags": [
       "editing"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "core"
   },
   {
     "id": "paste-clipboard",
@@ -538,7 +554,8 @@
     "tags": [
       "clipboard"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "conditional"
   },
   {
     "id": "native-select",
@@ -587,7 +604,8 @@
     "tags": [
       "native-controls"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "conditional"
   },
   {
     "id": "hover-dwell",
@@ -627,7 +645,8 @@
     "tags": [
       "hover"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "core"
   },
   {
     "id": "react-value-tracker",
@@ -654,7 +673,8 @@
     "tags": [
       "frameworks"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "core"
   },
   {
     "id": "keyboard-modifiers",
@@ -684,7 +704,8 @@
     "tags": [
       "keyboard"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "core"
   },
   {
     "id": "touch-events",
@@ -713,7 +734,8 @@
     "tags": [
       "touch"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "conditional"
   },
   {
     "id": "stack-trace-fingerprint",
@@ -744,7 +766,8 @@
     "tags": [
       "fingerprint"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "quality"
   },
   {
     "id": "viewport-edge-clicks",
@@ -771,7 +794,8 @@
     "tags": [
       "pointer-humanization"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "core"
   },
   {
     "id": "pointer-continuity",
@@ -805,7 +829,8 @@
     "tags": [
       "pointer-humanization"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "quality"
   },
   {
     "id": "mousemove-rate",
@@ -845,7 +870,8 @@
       "pointer-humanization"
     ],
     "requires": {},
-    "thresholds": {}
+    "thresholds": {},
+    "gate": "quality"
   },
   {
     "id": "scroll-momentum",
@@ -879,7 +905,8 @@
     "requires": {},
     "prerequisites": [
       "Trackpad-like momentum; physical detent mouse wheels may fail decay requirement even for manual users."
-    ]
+    ],
+    "gate": "quality"
   },
   {
     "id": "intersection-visibility",
@@ -915,7 +942,8 @@
     "tags": [
       "scroll-visibility"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "quality"
   },
   {
     "id": "shadow-dom-controls",
@@ -955,7 +983,8 @@
     "tags": [
       "dom-complexity"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "conditional"
   },
   {
     "id": "iframe-targeting",
@@ -994,7 +1023,8 @@
     "tags": [
       "frames"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "conditional"
   },
   {
     "id": "file-upload",
@@ -1026,7 +1056,8 @@
     "tags": [
       "files"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "core"
   },
   {
     "id": "keyboard-tab-navigation",
@@ -1109,7 +1140,8 @@
     "tags": [
       "focus-keyboard"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "core"
   },
   {
     "id": "network-console-capture",
@@ -1159,7 +1191,8 @@
     "tags": [
       "observability"
     ],
-    "requires": {}
+    "requires": {},
+    "gate": "core"
   },
   {
     "id": "dialog-handling",
@@ -1217,7 +1250,8 @@
       "If dialog handling is unsupported, page may block after click; this is expected signal."
     ],
     "manualBaseline": "unverified",
-    "gradeSource": "page"
+    "gradeSource": "page",
+    "gate": "conditional"
   },
   {
     "id": "target-blank-popup",
@@ -1262,7 +1296,8 @@
       "Child tab writes PASS to shared localStorage; harness should verify tab count/title too."
     ],
     "manualBaseline": "unverified",
-    "gradeSource": "page"
+    "gradeSource": "page",
+    "gate": "core"
   },
   {
     "id": "modal-focus-trap",
@@ -1321,7 +1356,8 @@
       "keyboard"
     ],
     "manualBaseline": "unverified",
-    "gradeSource": "page"
+    "gradeSource": "page",
+    "gate": "core"
   },
   {
     "id": "autocomplete-combobox",
@@ -1367,7 +1403,8 @@
       "forms"
     ],
     "manualBaseline": "unverified",
-    "gradeSource": "page"
+    "gradeSource": "page",
+    "gate": "core"
   },
   {
     "id": "spa-route-change",
@@ -1432,6 +1469,162 @@
     "gradeSource": "page",
     "notes": [
       "Requires a real browser Back action (e.g. Alt+Left) to exercise popstate before Save."
-    ]
+    ],
+    "gate": "core"
+  },
+  {
+    "id": "strict-csp-fallback",
+    "file": "challenges/39-strict-csp-fallback.html",
+    "category": "csp",
+    "difficulty": "L2",
+    "gate": "core",
+    "goal": "Operate a page with strict CSP that blocks unsafe-eval by falling back to screenshot/viewport-coordinate input.",
+    "expected": {
+      "synthetic": "FAIL",
+      "trusted": "PASS",
+      "manual": "PASS"
+    },
+    "recipe": [
+      {
+        "tool": "chrome_screenshot",
+        "params": {
+          "path": ".pi/chrome-screenshots/strict-csp-fallback.png"
+        }
+      },
+      {
+        "tool": "chrome_click",
+        "params": {
+          "x": 310,
+          "y": 256,
+          "trusted": true
+        }
+      }
+    ],
+    "requires": {
+      "cdp": true
+    },
+    "tags": [
+      "csp",
+      "screenshot",
+      "coordinate-click",
+      "strict-csp"
+    ],
+    "notes": [
+      "chrome_snapshot/chrome_evaluate may fail on this page because script-src omits unsafe-eval; this is intentional. Use screenshot plus viewport coordinates, then read verdict from dashboard/localStorage after leaving CSP page."
+    ],
+    "manualBaseline": "unverified",
+    "gradeSource": "page"
+  },
+  {
+    "id": "dynamic-wait-readiness",
+    "file": "challenges/40-dynamic-wait-readiness.html",
+    "category": "lazy-loading",
+    "difficulty": "L1",
+    "gate": "core",
+    "goal": "Wait for an asynchronously mounted and enabled control before clicking it.",
+    "expected": {
+      "synthetic": "FAIL",
+      "trusted": "PASS",
+      "manual": "PASS"
+    },
+    "recipe": [
+      {
+        "tool": "chrome_wait_for",
+        "params": {
+          "kind": "selector",
+          "value": "#readyAction[data-ready=\"true\"]:not([disabled])",
+          "timeoutMs": 3000
+        }
+      },
+      {
+        "tool": "chrome_click",
+        "params": {
+          "selector": "#readyAction",
+          "trusted": true
+        }
+      }
+    ],
+    "requires": {
+      "cdp": true
+    },
+    "tags": [
+      "wait",
+      "async-dom",
+      "readiness"
+    ],
+    "notes": [
+      "Covers explicit wait primitive and avoids fixed sleep as readiness strategy."
+    ],
+    "manualBaseline": "unverified",
+    "gradeSource": "page"
+  },
+  {
+    "id": "tab-lifecycle",
+    "file": "challenges/41-tab-lifecycle.html",
+    "category": "popups",
+    "difficulty": "L2",
+    "gate": "core",
+    "goal": "Create a new tab, inspect it, close it, return to the parent tab, and verify tab lifecycle state.",
+    "expected": {
+      "synthetic": "CONDITIONAL",
+      "trusted": "PASS",
+      "manual": "PASS"
+    },
+    "recipe": [
+      {
+        "tool": "chrome_tab",
+        "params": {
+          "action": "new",
+          "url": "http://127.0.0.1:8765/challenges/41-tab-lifecycle.html?child=1"
+        }
+      },
+      {
+        "tool": "chrome_tab",
+        "params": {
+          "action": "list"
+        }
+      },
+      {
+        "tool": "chrome_snapshot",
+        "params": {
+          "titleIncludes": "tab lifecycle"
+        }
+      },
+      {
+        "tool": "chrome_tab",
+        "params": {
+          "action": "close",
+          "targetId": "<child tab id from list>"
+        }
+      },
+      {
+        "tool": "chrome_tab",
+        "params": {
+          "action": "activate",
+          "targetId": "<parent tab id>"
+        }
+      },
+      {
+        "tool": "chrome_click",
+        "params": {
+          "selector": "#verify",
+          "trusted": true
+        }
+      }
+    ],
+    "requires": {
+      "popups": true
+    },
+    "tags": [
+      "tabs",
+      "new-tab",
+      "close-tab",
+      "activate-tab"
+    ],
+    "notes": [
+      "Recipe contains dynamic tab IDs; runner must substitute ids from chrome_tab list. Complements target=_blank by testing explicit new/close/activate tools."
+    ],
+    "manualBaseline": "unverified",
+    "gradeSource": "page"
   }
 ]

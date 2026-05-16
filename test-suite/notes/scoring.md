@@ -4,8 +4,16 @@
 
 Score actual verdict against `expected[mode]`, not raw PASS count.
 
-- `PASS` / `FAIL` expected: exact match required.
-- `CONDITIONAL`: exclude from headline score unless environment prerequisite is declared present.
+Gate buckets:
+
+- `core`: headline release gate. Exact expected verdict required.
+- `conditional`: gate only when declared capability/prerequisite is present; otherwise report skipped/conditional.
+- `quality`: adversarial humanization/fingerprint signal. Report trend and regressions, but do not block general release unless explicitly promoted.
+
+Expected values:
+
+- `PASS` / `FAIL` expected: exact match required inside active gate bucket.
+- `CONDITIONAL`: exclude from core headline score unless environment prerequisite is declared present.
 - `SKIP` / `WARN`: report separately.
 
 Recommended flake policy:

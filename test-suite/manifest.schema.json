@@ -12,6 +12,7 @@
       "file": { "type": "string" },
       "category": { "$ref": "#/$defs/category" },
       "difficulty": { "enum": ["L1", "L2", "L3"] },
+      "gate": { "description": "Ship-gate bucket. core blocks releases, conditional requires declared capability/environment, quality is adversarial/flaky signal and should not block general ship.", "enum": ["core", "conditional", "quality"] },
       "tags": { "type": "array", "items": { "type": "string" } },
       "goal": { "type": "string" },
       "gradeSource": { "enum": ["page", "harness", "both"], "default": "page" },
@@ -65,7 +66,7 @@
     "outcome": { "enum": ["PASS", "FAIL", "SKIP", "WARN", "CONDITIONAL"] },
     "category": {
       "enum": [
-        "activation-gates", "agent-safety", "aria-snapshot", "canvas-svg", "clipboard", "contextmenu", "dialogs", "dom-complexity", "downloads", "drag-drop", "editing", "files", "fingerprint", "focus-keyboard", "forms", "frames", "frameworks", "hover", "keyboard", "lazy-loading", "native-controls", "observability", "pointer-humanization", "popups", "scroll", "scroll-visibility", "spa-routing", "task-completion", "timing", "touch", "trusted-input"
+        "activation-gates", "agent-safety", "aria-snapshot", "canvas-svg", "clipboard", "contextmenu", "csp", "dialogs", "dom-complexity", "downloads", "drag-drop", "editing", "files", "fingerprint", "focus-keyboard", "forms", "frames", "frameworks", "hover", "keyboard", "lazy-loading", "native-controls", "observability", "pointer-humanization", "popups", "scroll", "scroll-visibility", "spa-routing", "task-completion", "timing", "touch", "trusted-input"
       ]
     }
   }
