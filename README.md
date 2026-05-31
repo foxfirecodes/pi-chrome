@@ -135,19 +135,19 @@ Agents can verify page state immediately instead of blindly retrying.
 
 ## What an agent gets
 
-**19 tools**, grouped by job. Every one runs against your already-open tabs.
+**21 tools**, grouped by job. Every one runs against your already-open tabs.
 
 | Category        | Tools                                                                                          |
 | --------------- | ---------------------------------------------------------------------------------------------- |
 | **Tabs**        | `chrome_tab` (list/new/activate/close/version), `chrome_launch`                                |
-| **Inspect**     | `chrome_snapshot` (uids + selectors + text + viewport), `chrome_screenshot`, `chrome_evaluate` |
+| **Inspect**     | `chrome_snapshot` (concise observation, layout/context, query, modes, uids + selectors), `chrome_find`, `chrome_inspect`, `chrome_screenshot`, `chrome_evaluate` |
 | **Navigate**    | `chrome_navigate` (with optional `initScript` at `document_start`), `chrome_wait_for`          |
 | **Interact**    | `chrome_click`, `chrome_type`, `chrome_fill`, `chrome_key`, `chrome_hover`                     |
 | **Gesture**     | `chrome_drag` (Chrome pointer drag), `chrome_scroll` (wheel + momentum), `chrome_tap` (touch)  |
 | **Files**       | `chrome_upload_file` (Chrome file-input control; no native picker)                             |
 | **Observe**     | `chrome_list_console_messages`, `chrome_list_network_requests`, `chrome_get_network_request` (with response body) |
 
-Each tool is documented inline in Pi — agents see the parameters and gotchas (Chrome input, CSP limits, file upload behavior) without trial-and-error.
+Each tool is documented inline in Pi — agents see the parameters and gotchas (Chrome input, CSP limits, file upload behavior) without trial-and-error. `chrome_snapshot` defaults to a concise observation with structural layout/context around controls; use `query`, `mode: "forms"`, `"interactive"`, `"pageMap"`, `"text"`, `"changes"`, or `"full"` to zoom into the page without fighting truncation. `chrome_find` is a query-first shortcut, and `chrome_inspect` expands one uid into nearby text/actions/form context.
 
 ### Known limits vs. human Chrome use
 

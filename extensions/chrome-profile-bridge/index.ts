@@ -71,6 +71,134 @@ function safeJson(value: unknown): string {
 	return JSON.stringify(value, null, 2);
 }
 
+function compactLine(value: unknown, max = 140): string {
+	const text = String(value ?? "").replace(/\s+/g, " ").trim();
+	return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function formatChromeSnapshot(snapshot: any): string {
+	if (!snapshot || typeof snapshot !== "object") return safeJson(snapshot);
+	if (snapshot.mode === "full") return truncateText(safeJson(snapshot));
+	const lines: string[] = [];
+	lines.push(`# Chrome snapshot${snapshot.mode ? ` (${snapshot.mode})` : ""}`);
+	lines.push(`${snapshot.title || "(untitled)"}`);
+	if (snapshot.url) lines.push(`${snapshot.url}`);
+	if (snapshot.viewport) lines.push(`viewport=${snapshot.viewport.width}x${snapshot.viewport.height} scroll=${snapshot.viewport.scrollX || 0},${snapshot.viewport.scrollY || 0}`);
+	if (snapshot.summary?.modal) lines.push(`modal: ${snapshot.summary.modal.uid} ${compactLine(snapshot.summary.modal.label)}`);
+	if (snapshot.summary?.focused) lines.push(`focused: ${snapshot.summary.focused.uid} ${snapshot.summary.focused.role || ""} ${compactLine(snapshot.summary.focused.label)}`);
+	if (Array.isArray(snapshot.summary?.hints) && snapshot.summary.hints.length) {
+		lines.push("\n## Hints");
+		for (const hint of snapshot.summary.hints.slice(0, 6)) lines.push(`- ${hint}`);
+	}
+	if (snapshot.diff && !snapshot.diff.firstSnapshot) {
+		const changed = [
+			...(snapshot.diff.changes || []).map((c: any) => c.kind === "textChanged" ? "text changed" : `${c.kind}: ${compactLine(c.before, 50)} → ${compactLine(c.after, 50)}`),
+			...(snapshot.diff.added || []).slice(0, 4).map((e: any) => `added ${e.uid} ${e.role || ""} ${compactLine(e.label)}`),
+			...(snapshot.diff.updated || []).slice(0, 4).map((u: any) => `updated ${u.uid} ${compactLine(u.after?.label || u.before?.label)}`),
+		];
+		if (changed.length) {
+			lines.push("\n## Changed since last snapshot");
+			for (const item of changed.slice(0, 10)) lines.push(`- ${item}`);
+		}
+	}
+	if (Array.isArray(snapshot.matches) && snapshot.matches.length) {
+		lines.push(`\n## Matches for "${snapshot.query}"`);
+		for (const match of snapshot.matches.slice(0, 12)) {
+			if (match.kind === "text") lines.push(`- ${match.uid} text ${compactLine(match.text)} @ ${rectText(match.rect)}`);
+			else if (match.kind === "region") lines.push(`- ${match.uid} region:${match.kind} ${compactLine(match.label)} headings=${(match.headings || []).map((h: string) => compactLine(h, 50)).join(" | ")}`);
+			else lines.push(`- ${match.uid} ${match.role || match.tag || "element"}${match.disabled ? " disabled" : ""} ${compactLine(match.label || match.selector)} @ ${rectText(match.rect)}`);
+		}
+	}
+	if (snapshot.mode === "pageMap" && snapshot.pageMap) {
+		lines.push("\n## Page map");
+		for (const region of (snapshot.pageMap.regions || []).slice(0, 18)) {
+			lines.push(`- ${region.uid} ${region.kind}: ${compactLine(region.label)}`);
+			for (const action of (region.actions || []).slice(0, 5)) lines.push(`  - ${action.uid} ${action.role || ""}${action.disabled ? " disabled" : ""} ${compactLine(action.label)}`);
+		}
+		if (snapshot.pageMap.headings?.length) {
+			lines.push("\nHeadings:");
+			for (const h of snapshot.pageMap.headings.slice(0, 20)) lines.push(`- ${h.uid} h${h.level || ""} ${compactLine(h.text)}`);
+		}
+	}
+	if (Array.isArray(snapshot.layout) && snapshot.layout.length && snapshot.mode !== "changes") {
+		lines.push("\n## Layout / context");
+		for (const section of snapshot.layout.slice(0, snapshot.mode === "pageMap" ? 18 : 8)) {
+			const bits = [`${section.uid}`, section.role || section.tag, compactLine(section.label || section.text || "(unnamed section)", 110), `@ ${rectText(section.rect)}`];
+			lines.push(`- ${bits.filter(Boolean).join(" ")}`);
+			const fieldLabels = (section.fields || []).slice(0, 4).map((f: any) => `${f.uid} ${compactLine(f.label || f.role, 40)}`);
+			const actionLabels = (section.actions || []).slice(0, 5).map((a: any) => `${a.uid}${a.disabled ? " disabled" : ""} ${compactLine(a.label || a.role, 40)}`);
+			if (fieldLabels.length) lines.push(`  fields: ${fieldLabels.join("; ")}`);
+			if (actionLabels.length) lines.push(`  actions: ${actionLabels.join("; ")}`);
+		}
+	}
+	if ((snapshot.mode === "forms" || snapshot.forms?.fields?.length) && snapshot.mode !== "pageMap") {
+		const fields = snapshot.forms?.fields || [];
+		const submits = snapshot.forms?.submits || [];
+		if (fields.length || submits.length) lines.push("\n## Forms");
+		for (const field of fields.slice(0, snapshot.mode === "forms" ? 40 : 12)) {
+			const bits = [field.uid, field.role || field.tag, field.required ? "required" : "", field.invalid ? "invalid" : "", field.disabled ? "disabled" : "", compactLine(field.label || field.selector, 90)];
+			if (field.value) bits.push(`value=${compactLine(field.value, 50)}`);
+			lines.push(`- ${bits.filter(Boolean).join(" ")} @ ${rectText(field.rect)}`);
+		}
+		for (const submit of submits.slice(0, 8)) lines.push(`- ${submit.uid} submit/action${submit.disabled ? " disabled" : ""} ${compactLine(submit.label || submit.selector)} @ ${rectText(submit.rect)}`);
+	}
+	if (Array.isArray(snapshot.elements) && snapshot.mode !== "pageMap") {
+		lines.push("\n## Visible actions");
+		for (const el of snapshot.elements.slice(0, snapshot.mode === "interactive" ? 60 : 25)) {
+			const flags = [el.disabled ? "disabled" : "", el.occluded ? `occluded-by-${el.occluded.tag}` : ""].filter(Boolean).join(",");
+			const context = el.context?.label ? ` in ${el.context.uid} ${compactLine(el.context.label, 60)}` : "";
+			lines.push(`- ${el.uid} ${el.role || el.tag}${flags ? ` [${flags}]` : ""} ${compactLine(el.label || el.selector)}${context} @ ${rectText(el.rect)}`);
+		}
+		if (snapshot.elements.length > (snapshot.mode === "interactive" ? 60 : 25)) lines.push(`- … ${snapshot.elements.length - (snapshot.mode === "interactive" ? 60 : 25)} more; retry with maxElements or mode=interactive`);
+	}
+	if ((snapshot.mode === "text" || snapshot.mode === "auto") && Array.isArray(snapshot.textSnippets) && snapshot.textSnippets.length) {
+		lines.push("\n## Text snippets");
+		for (const snip of snapshot.textSnippets.slice(0, snapshot.mode === "text" ? 40 : 14)) lines.push(`- ${snip.uid} ${compactLine(snip.text, snapshot.mode === "text" ? 240 : 160)}`);
+		if (snapshot.textTruncated) lines.push("- … page text truncated; retry with mode=text or maxTextChars for more");
+	}
+	lines.push("\nTip: use chrome_snapshot({query:'...', mode:'interactive|forms|pageMap|text|changes|full'}) or nearUid to zoom in.");
+	return truncateText(lines.join("\n"));
+}
+
+function rectText(rect: any): string {
+	if (!rect) return "?";
+	return `${rect.x},${rect.y} ${rect.width}x${rect.height}`;
+}
+
+function formatIncludedSnapshotText(raw: unknown, text: string): string {
+	const snapshot = raw && typeof raw === "object" ? (raw as { snapshot?: unknown }).snapshot : undefined;
+	return snapshot ? `${text}\n\n${formatChromeSnapshot(snapshot)}` : text;
+}
+
+function formatChromeInspect(inspect: any): string {
+	if (!inspect || typeof inspect !== "object") return safeJson(inspect);
+	const t = inspect.target || {};
+	const lines: string[] = [];
+	lines.push(`# Chrome inspect ${t.uid || ""}`.trim());
+	lines.push(`${t.role || t.tag || "element"}${t.disabled ? " disabled" : ""}${t.occluded ? ` occluded-by-${t.occluded.tag}` : ""} ${compactLine(t.label || t.selector)}`);
+	if (t.selector) lines.push(`selector: ${t.selector}`);
+	if (t.rect) lines.push(`rect: ${rectText(t.rect)}`);
+	if (inspect.clickSuggestion) lines.push(`suggested click: chrome_click({ uid: "${inspect.clickSuggestion.uid}" }) or x=${inspect.clickSuggestion.x}, y=${inspect.clickSuggestion.y}`);
+	if (Array.isArray(inspect.nearbyText) && inspect.nearbyText.length) {
+		lines.push("\n## Nearby text");
+		for (const item of inspect.nearbyText.slice(0, 12)) lines.push(`- ${item.uid} ${compactLine(item.text, 180)}`);
+	}
+	if (inspect.formContext) {
+		lines.push("\n## Form context");
+		for (const field of (inspect.formContext.fields || []).slice(0, 20)) lines.push(`- ${field.uid} ${field.role || field.tag}${field.disabled ? " disabled" : ""} ${compactLine(field.label || field.selector)}${field.value ? ` value=${compactLine(field.value, 60)}` : ""}`);
+		for (const action of (inspect.formContext.actions || []).slice(0, 10)) lines.push(`- ${action.uid} action${action.disabled ? " disabled" : ""} ${compactLine(action.label || action.selector)}`);
+	}
+	if (Array.isArray(inspect.nearbyActions) && inspect.nearbyActions.length) {
+		lines.push("\n## Nearby actions");
+		for (const action of inspect.nearbyActions.slice(0, 18)) lines.push(`- ${action.uid} ${action.role || action.tag}${action.disabled ? " disabled" : ""} ${compactLine(action.label || action.selector)} @ ${rectText(action.rect)}`);
+	}
+	if (Array.isArray(inspect.ancestors) && inspect.ancestors.length) {
+		lines.push("\n## Ancestors");
+		for (const a of inspect.ancestors.slice(0, 6)) lines.push(`- ${a.uid} ${a.role || a.tag} ${compactLine(a.label || a.selector, 120)}`);
+	}
+	return truncateText(lines.join("\n"));
+}
+
 function extensionRoot(): string {
 	// Resolve relative to this extension file, not ctx.cwd. ctx.cwd can temporarily be
 	// an attachment/clipboard path when Pi is handling pasted images.
@@ -994,8 +1122,8 @@ Capability model (important):
 
 Usage rules:
 1. If a chrome_* tool says Chrome control is locked, ask the user to run \`/chrome authorize\` before retrying.
-2. \`chrome_snapshot\` before clicking/typing; pass \`uid\` over \`selector\`.
-3. \`includeSnapshot=true\` on click/type/fill/key to verify in one round trip.
+2. Use \`chrome_snapshot\` before clicking/typing; pass \`uid\` over \`selector\`. The default snapshot is concise and includes structural layout/context around controls so generic labels like “Add” have meaning. Use \`query\` (or \`chrome_find\`) and \`mode: "forms" | "interactive" | "pageMap" | "text" | "changes" | "full"\` to zoom instead of asking for a giant dump. Use \`chrome_inspect(uid)\` for nearby text/actions/form context around one candidate.
+3. \`includeSnapshot=true\` on click/type/fill/key to verify in one round trip; follow with \`chrome_snapshot({mode:"changes"})\` when you only need what changed.
 4. If \`chrome_evaluate\` returns null when you expected a value, the expression evaluated to null/undefined in the page; surface the value via \`JSON.stringify\` to confirm.
 5. \`chrome_navigate\` supports an optional \`initScript\` that runs at document_start in MAIN world for the next navigation (good for seeding localStorage or stubbing Date.now).
 6. By default chrome_* tools focus Chrome so the user can watch; pass \`background=true\` or run /chrome background on for session-wide background execution.
@@ -1461,13 +1589,16 @@ Usage rules:
 		name: "chrome_snapshot",
 		label: "Chrome Snapshot",
 		description:
-			"Inspect a page in the user's existing Chrome profile: title, URL, visible body text, viewport, and clickable/focusable elements with stable uids plus CSS selectors. Brings Chrome to the foreground by default so the user can watch; pass background=true to inspect silently.",
-		promptSnippet: "Inspect the current Chrome page and get CSS selectors for browser automation.",
+			"Inspect a page in the user's existing Chrome profile. Default output is a concise, agent-friendly observation with structural layout/context, stable uids, visible actions, form fields, page hints, and changes since the previous snapshot. Use mode/query/nearUid to zoom instead of dumping the whole page. Brings Chrome to the foreground by default; pass background=true to inspect silently.",
+		promptSnippet: "Observe the current Chrome page: concise summary, structural layout, visible actions, forms, page map, query matches, and stable uids.",
 		parameters: Type.Object({
 			targetId: Type.Optional(Type.String()),
 			urlIncludes: Type.Optional(Type.String()),
 			titleIncludes: Type.Optional(Type.String()),
 			maxElements: Type.Optional(Type.Number({ default: MAX_ELEMENTS })),
+			mode: Type.Optional(Type.String({ description: "Observation mode: auto (concise default), interactive (actions only), forms, pageMap, text, changes, or full (raw JSON-style snapshot)." })),
+			query: Type.Optional(Type.String({ description: "Find/rank elements, regions, and text matching this phrase, e.g. 'merge button', 'email error', 'approve PR'." })),
+			maxTextChars: Type.Optional(Type.Number({ description: "Max body text chars included in the underlying snapshot. Defaults are smaller for concise modes." })),
 			containingText: Type.Optional(Type.String({ description: "Only return elements whose label/text contains this string (case-insensitive). Useful when the page has many controls." })),
 			roleFilter: Type.Optional(Type.String({ description: "Only return elements matching this ARIA role or tag name (case-insensitive). e.g. 'button', 'link', 'textbox'." })),
 			nearUid: Type.Optional(Type.String({ description: "Sort elements by proximity to this snapshot uid. Useful for finding controls near a known anchor." })),
@@ -1484,7 +1615,83 @@ Usage rules:
 				DEFAULT_TIMEOUT_MS,
 				signal,
 			);
-			return { content: [{ type: "text", text: truncateText(safeJson(snapshot)) }], details: { snapshot } };
+			return { content: [{ type: "text", text: formatChromeSnapshot(snapshot) }], details: { snapshot } };
+		},
+	});
+
+	pi.registerTool({
+		name: "chrome_find",
+		label: "Chrome Find",
+		description:
+			"Find elements, page regions, or text on the current Chrome page by query. Returns ranked matches with stable uids and coordinates. This is a focused wrapper around chrome_snapshot({ query }).",
+		promptSnippet: "Find matching controls/text/regions in Chrome by natural-language query and return stable uids.",
+		parameters: Type.Object({
+			query: Type.String({ description: "What to find, e.g. 'merge button', 'email error', 'approve PR', 'search box'." }),
+			mode: Type.Optional(Type.String({ description: "Optional snapshot mode to combine with query: auto, interactive, forms, pageMap, text." })),
+			maxElements: Type.Optional(Type.Number({ default: MAX_ELEMENTS })),
+			targetId: Type.Optional(Type.String()),
+			urlIncludes: Type.Optional(Type.String()),
+			titleIncludes: Type.Optional(Type.String()),
+			background: Type.Optional(
+				Type.Boolean({ description: "If true, run silently in the background without focusing Chrome. Default false." }),
+			),
+			host: Type.Optional(Type.String()),
+			port: Type.Optional(Type.Number()),
+		}),
+		async execute(_id, params, signal): Promise<ToolTextResult> {
+			const snapshot = await authorizedBridgeSend(
+				"page.snapshot",
+				withBackground({ ...params, mode: params.mode || "auto", maxElements: params.maxElements ?? MAX_ELEMENTS }),
+				DEFAULT_TIMEOUT_MS,
+				signal,
+			);
+			return { content: [{ type: "text", text: formatChromeSnapshot(snapshot) }], details: { snapshot } };
+		},
+	});
+
+	pi.registerTool({
+		name: "chrome_inspect",
+		label: "Chrome Inspect Element",
+		description:
+			"Inspect one snapshot uid or selector deeply: nearby text, nearby actions, form context, ancestors, and suggested click target. Use after chrome_snapshot/chrome_find when you need context around one element.",
+		promptSnippet: "Inspect a Chrome snapshot uid deeply for nearby text, form context, and suggested actions.",
+		parameters: Type.Object({
+			uid: Type.Optional(Type.String({ description: "Stable element uid from chrome_snapshot/chrome_find." })),
+			selector: Type.Optional(Type.String({ description: "CSS selector if uid is unavailable." })),
+			targetId: Type.Optional(Type.String()),
+			urlIncludes: Type.Optional(Type.String()),
+			titleIncludes: Type.Optional(Type.String()),
+			background: Type.Optional(
+				Type.Boolean({ description: "If true, run silently in the background without focusing Chrome. Default false." }),
+			),
+			host: Type.Optional(Type.String()),
+			port: Type.Optional(Type.Number()),
+		}),
+		async execute(_id, params, signal): Promise<ToolTextResult> {
+			try {
+				const inspect = await authorizedBridgeSend("page.inspect", withBackground(params), DEFAULT_TIMEOUT_MS, signal);
+				return { content: [{ type: "text", text: formatChromeInspect(inspect) }], details: { inspect } };
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				if (!/Unknown action: page\.inspect/i.test(message)) throw error;
+				// Compatibility fallback for a loaded Chrome extension service worker that has not
+				// been reloaded since chrome_inspect was added. It is less rich than page.inspect,
+				// but still gives useful nearby candidates instead of failing the workflow.
+				const snapshot = await authorizedBridgeSend(
+					"page.snapshot",
+					withBackground({
+						...params,
+						mode: "interactive",
+						maxElements: MAX_ELEMENTS,
+						nearUid: params.uid,
+						query: params.selector,
+					}),
+					DEFAULT_TIMEOUT_MS,
+					signal,
+				);
+				const text = `chrome_inspect fallback: loaded Chrome extension does not yet support page.inspect; reload it at chrome://extensions for deep inspect.\n\n${formatChromeSnapshot(snapshot)}`;
+				return { content: [{ type: "text", text }], details: { snapshot, fallback: "page.snapshot" } };
+			}
 		},
 	});
 
@@ -1571,7 +1778,7 @@ Usage rules:
 			const summary = summarizeActionResult(result);
 			const target = params.uid ?? params.selector ?? `${params.x},${params.y}`;
 			const text = summary ? `Clicked ${target} — ${summary}` : `Clicked ${target}`;
-			return { content: [{ type: "text", text }], details: { result: raw as Json } };
+			return { content: [{ type: "text", text: formatIncludedSnapshotText(raw, text) }], details: { result: raw as Json } };
 		},
 	});
 
@@ -1603,7 +1810,8 @@ Usage rules:
 			const summary = summarizeActionResult(result);
 			const into = params.uid || params.selector ? ` into ${params.uid ?? params.selector}` : "";
 			const base = `Typed ${params.text.length} character(s)${into}.`;
-			return { content: [{ type: "text", text: summary ? `${base} (${summary})` : base }], details: { result: raw as Json } };
+			const text = summary ? `${base} (${summary})` : base;
+			return { content: [{ type: "text", text: formatIncludedSnapshotText(raw, text) }], details: { result: raw as Json } };
 		},
 	});
 
@@ -1635,7 +1843,8 @@ Usage rules:
 			const summary = summarizeActionResult(result);
 			const into = params.uid || params.selector ? ` into ${params.uid ?? params.selector}` : "";
 			const base = `Filled ${params.text.length} character(s)${into}.`;
-			return { content: [{ type: "text", text: summary ? `${base} (${summary})` : base }], details: { result: raw as Json } };
+			const text = summary ? `${base} (${summary})` : base;
+			return { content: [{ type: "text", text: formatIncludedSnapshotText(raw, text) }], details: { result: raw as Json } };
 		},
 	});
 
@@ -1669,7 +1878,8 @@ Usage rules:
 			const result = (params.includeSnapshot ? (raw as { result: unknown }).result : raw) as Json;
 			const summary = summarizeActionResult(result);
 			const base = `Pressed ${params.key}.`;
-			return { content: [{ type: "text", text: summary ? `${base} (${summary})` : base }], details: { result: raw as Json } };
+			const text = summary ? `${base} (${summary})` : base;
+			return { content: [{ type: "text", text: formatIncludedSnapshotText(raw, text) }], details: { result: raw as Json } };
 		},
 	});
 

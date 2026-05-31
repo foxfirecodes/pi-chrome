@@ -42,8 +42,8 @@ pi-chrome ships as an unpacked extension so the source and broad browser permiss
 
 ## What's the install footprint?
 
-- Pi side: one extension that registers 19 tools and a few slash commands.
-- Chrome side: one unpacked extension, ~2000 LOC of plain JavaScript, no dependencies.
+- Pi side: one extension that registers 21 tools and a few slash commands.
+- Chrome side: one unpacked extension, ~2500 LOC of plain JavaScript, no dependencies.
 
 ## Can I script it without Pi?
 
@@ -59,9 +59,9 @@ Not always. `chrome_evaluate` compiles caller-provided code in the page's MAIN w
 
 ## How do I tell whether a click or type worked?
 
-Use `includeSnapshot=true` on `chrome_click`, `chrome_type`, `chrome_fill`, or `chrome_key`. The tool returns the Chrome-input result plus a fresh snapshot, so the agent can verify text, URL, visible elements, or form values before continuing.
+Use `includeSnapshot=true` on `chrome_click`, `chrome_type`, `chrome_fill`, or `chrome_key`. The tool returns the Chrome-input result plus a fresh concise snapshot, so the agent can verify text, URL, visible elements, or form values before continuing.
 
-If the page did not change, take a fresh snapshot or screenshot and check for overlays, disabled controls, stale element uids, or app-side validation.
+If the page did not change, take `chrome_snapshot({ mode: "changes" })` or a screenshot and check for overlays, disabled controls, stale element uids, or app-side validation. Use `query` or modes like `forms`, `interactive`, `pageMap`, and `text` to avoid huge truncated dumps.
 
 ## How do I attach a file to a React file input?
 

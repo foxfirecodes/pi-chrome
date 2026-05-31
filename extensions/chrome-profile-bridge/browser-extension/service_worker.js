@@ -903,6 +903,8 @@ async function dispatch(action, params) {
     }
     case "page.snapshot":
       return snapshotInTab(params);
+    case "page.inspect":
+      return inspectInTab(params);
     case "page.evaluate":
       return evaluateInTab(params);
     case "page.click":
@@ -1031,6 +1033,9 @@ async function snapshotInTab(params) {
     params.containingText ?? null,
     params.roleFilter ?? null,
     params.nearUid ?? null,
+    params.mode || "auto",
+    params.query ?? null,
+    params.maxTextChars ?? null,
   ];
   await chrome.scripting.executeScript({
     target: { tabId: tab.id, frameIds: [0] },
@@ -1059,6 +1064,42 @@ async function snapshotInTab(params) {
   const envelope = first?.result;
   if (envelope && typeof envelope === "object" && envelope.ok === false) {
     throw new Error(envelope.error || "Chrome snapshot script failed");
+  }
+  return envelope?.value;
+}
+
+async function inspectInTab(params) {
+  if (!params.uid && !params.selector) throw new Error("chrome_inspect requires uid or selector");
+  const tab = await getTabByParams(params);
+  if (params.foreground) await bringToFront(tab);
+  const args = [params.uid ?? null, params.selector ?? null];
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id, frameIds: [0] },
+    world: "MAIN",
+    files: ["snapshot_injected.js"],
+  });
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: tab.id, frameIds: [0] },
+    world: "MAIN",
+    func: async (invocationArgs) => {
+      try {
+        const inspectTarget = globalThis.__piChromeInspectTarget;
+        if (typeof inspectTarget !== "function") throw new Error("snapshot_injected.js did not install __piChromeInspectTarget");
+        return { ok: true, value: await inspectTarget(...invocationArgs) };
+      } catch (error) {
+        return { ok: false, error: error?.stack || error?.message || String(error) };
+      }
+    },
+    args: [args],
+  });
+  const first = results?.[0];
+  if (first?.error) {
+    const message = typeof first.error === "string" ? first.error : (first.error.message || JSON.stringify(first.error));
+    throw new Error(message);
+  }
+  const envelope = first?.result;
+  if (envelope && typeof envelope === "object" && envelope.ok === false) {
+    throw new Error(envelope.error || "Chrome inspect script failed");
   }
   return envelope?.value;
 }
