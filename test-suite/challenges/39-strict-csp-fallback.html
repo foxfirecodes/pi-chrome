@@ -6,7 +6,7 @@
 <script src="../_lib.js"></script>
 <body>
 <main>
-  <p>Goal: page blocks <code>unsafe-eval</code>. Agent should fall back to screenshot/coordinate observation and click the target without relying on snapshot/evaluate.</p>
+  <p>Goal: page blocks <code>unsafe-eval</code>. <code>chrome_snapshot</code> should still work; if evaluation is blocked, use snapshot or screenshot/coordinate observation and click the target.</p>
   <p id="hint">The green target is fixed at known viewport coordinates. Use a screenshot, then click inside it.</p>
   <button id="cspTarget" aria-label="strict CSP target">CSP TARGET</button>
 </main>

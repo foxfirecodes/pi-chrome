@@ -1478,7 +1478,7 @@
     "category": "csp",
     "difficulty": "L2",
     "gate": "core",
-    "goal": "Operate a page with strict CSP that blocks unsafe-eval by falling back to screenshot/viewport-coordinate input.",
+    "goal": "Operate a page with strict CSP that blocks unsafe-eval; snapshot should still work, and screenshot/viewport-coordinate input remains a fallback.",
     "expected": {
       "synthetic": "FAIL",
       "trusted": "PASS",
@@ -1510,7 +1510,7 @@
       "strict-csp"
     ],
     "notes": [
-      "chrome_snapshot/chrome_evaluate may fail on this page because script-src omits unsafe-eval; this is intentional. Use screenshot plus viewport coordinates, then read verdict from dashboard/localStorage after leaving CSP page."
+      "chrome_evaluate may fail on this page because script-src omits unsafe-eval; this is intentional. chrome_snapshot should still work via the packaged extension script. Screenshot plus viewport coordinates remains a valid fallback."
     ],
     "manualBaseline": "unverified",
     "gradeSource": "page"

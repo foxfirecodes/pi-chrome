@@ -7,6 +7,7 @@ All notable user-facing changes to `pi-chrome`.
 - **Security hardening fork.** The Chrome bridge now defaults to off, adds `/chrome server start|stop|status`, and pairs one companion extension using `/chrome pair` plus a popup-entered one-time code.
 - **Authenticated bridge endpoints.** `/command`, `/next`, and `/result` now require capabilities; extension polling/results use WebCrypto challenge-response and short-lived in-memory session tokens.
 - **Request size limits.** Bridge JSON request bodies are capped to reduce local memory-pressure risk.
+- **Strict-CSP snapshots.** `chrome_snapshot` now runs from a packaged extension script instead of reconstructing itself with the page `Function` constructor, so pages that block `'unsafe-eval'` no longer break snapshots.
 
 ## 0.15.26 — 2026-05-16
 

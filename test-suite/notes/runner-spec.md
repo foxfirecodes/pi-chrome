@@ -23,7 +23,7 @@ Runner must adapt recipe intent:
 - adapt unsupported shadow/iframe selector notation to snapshot uids or evaluate fallback
 - preserve hook install ordering for console/network capture tests
 - substitute dynamic tab ids from `chrome_tab list` recipes
-- support screenshot/coordinate fallback for strict CSP pages where snapshot/evaluate are blocked
+- support snapshot first and screenshot/coordinate fallback for strict CSP pages where evaluate is blocked
 - record whether trusted/CDP path was used
 
 Long-horizon task runner should read `task-manifest.json`, replace `$RUN_ID`, solve task, then evaluate task grader expression.

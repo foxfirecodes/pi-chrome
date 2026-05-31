@@ -151,7 +151,7 @@ Each tool is documented inline in Pi — agents see the parameters and gotchas (
 
 ### Known limits vs. human Chrome use
 
-pi-chrome is strongest on web-page workflows exposed through DOM, screenshots, tabs, and Chrome input. It is not a full human/OS substitute. Current limitations include native Chrome/OS surfaces (print/save dialogs, permission bubbles, password-manager prompts), cross-origin iframe DOM access, rich multitouch/pinch/stylus gestures, visual CAPTCHA/bot challenges, hardware-backed auth (passkeys/security keys/biometrics), and arbitrary OS app interaction. For strict-CSP pages, use screenshot + coordinate input when `chrome_snapshot`/`chrome_evaluate` are blocked.
+pi-chrome is strongest on web-page workflows exposed through DOM, screenshots, tabs, and Chrome input. It is not a full human/OS substitute. Current limitations include native Chrome/OS surfaces (print/save dialogs, permission bubbles, password-manager prompts), cross-origin iframe DOM access, rich multitouch/pinch/stylus gestures, visual CAPTCHA/bot challenges, hardware-backed auth (passkeys/security keys/biometrics), and arbitrary OS app interaction. `chrome_snapshot` works on strict-CSP pages; if `chrome_evaluate` is blocked there, inspect with snapshot/screenshot and use coordinate input.
 
 ---
 

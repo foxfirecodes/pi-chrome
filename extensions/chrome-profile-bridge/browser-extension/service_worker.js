@@ -902,12 +902,7 @@ async function dispatch(action, params) {
       return { closed: tab.id };
     }
     case "page.snapshot":
-      return executeInTab(params, snapshotPage, [
-        params.maxElements || 80,
-        params.containingText ?? null,
-        params.roleFilter ?? null,
-        params.nearUid ?? null,
-      ]);
+      return snapshotInTab(params);
     case "page.evaluate":
       return evaluateInTab(params);
     case "page.click":
@@ -1028,6 +1023,46 @@ const HELPER_FUNCS = [
   scrollPage,
 ];
 
+async function snapshotInTab(params) {
+  const tab = await getTabByParams(params);
+  if (params.foreground) await bringToFront(tab);
+  const args = [
+    params.maxElements || 80,
+    params.containingText ?? null,
+    params.roleFilter ?? null,
+    params.nearUid ?? null,
+  ];
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id, frameIds: [0] },
+    world: "MAIN",
+    files: ["snapshot_injected.js"],
+  });
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: tab.id, frameIds: [0] },
+    world: "MAIN",
+    func: async (invocationArgs) => {
+      try {
+        const snapshotPage = globalThis.__piChromeSnapshotPage;
+        if (typeof snapshotPage !== "function") throw new Error("snapshot_injected.js did not install __piChromeSnapshotPage");
+        return { ok: true, value: await snapshotPage(...invocationArgs) };
+      } catch (error) {
+        return { ok: false, error: error?.stack || error?.message || String(error) };
+      }
+    },
+    args: [args],
+  });
+  const first = results?.[0];
+  if (first?.error) {
+    const message = typeof first.error === "string" ? first.error : (first.error.message || JSON.stringify(first.error));
+    throw new Error(message);
+  }
+  const envelope = first?.result;
+  if (envelope && typeof envelope === "object" && envelope.ok === false) {
+    throw new Error(envelope.error || "Chrome snapshot script failed");
+  }
+  return envelope?.value;
+}
+
 async function executeInTab(params, func, args) {
   const tab = await getTabByParams(params);
   if (params.foreground) await bringToFront(tab);
@@ -1037,12 +1072,11 @@ async function executeInTab(params, func, args) {
     world: "MAIN",
     func: async (helperSource, source, invocationArgs) => {
       try {
-        // Helpers are plain function declarations; injecting them via Function constructor avoids
-        // running through `eval` (which is restricted under strict CSP) and keeps them isolated.
+        // Legacy generic executor: helpers and action are reconstructed from source text.
+        // This path is still CSP-sensitive because MAIN-world Function construction requires
+        // `script-src 'unsafe-eval'`. `chrome_snapshot` uses snapshot_injected.js instead.
         new Function(helperSource).call(globalThis);
-        // The action itself is reconstructed from its source text. We use `new Function` rather
-        // than `eval` because the latter is blocked by `script-src 'self'` (no `'unsafe-eval'`)
-        // CSPs that are common on production sites.
+        // The action itself is reconstructed from its source text.
         const injected = new Function(helperSource + "\nreturn (" + source + ");").call(globalThis);
         return { ok: true, value: await injected(...invocationArgs) };
       } catch (error) {
@@ -1134,7 +1168,7 @@ async function evaluateInTab(params) {
 async function withOptionalSnapshot(params, actionFn) {
   const result = await actionFn(params);
   if (params.includeSnapshot) {
-    const snapshot = await executeInTab({ ...params, foreground: false }, snapshotPage, [params.maxElements || 80, null, null, null]);
+    const snapshot = await snapshotInTab({ ...params, foreground: false, containingText: null, roleFilter: null, nearUid: null });
     return { result, snapshot };
   }
   return result;
