@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Pi Chrome Connector</title>
+  <style>
+    body { width: 320px; margin: 0; padding: 16px; font: 13px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #111827; }
+    h1 { font-size: 16px; margin: 0 0 12px; }
+    .muted { color: #6b7280; }
+    .row { margin: 10px 0; }
+    code { background: #f3f4f6; padding: 2px 4px; border-radius: 4px; word-break: break-all; }
+    input { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; font: inherit; text-transform: uppercase; }
+    button { padding: 8px 10px; border: 0; border-radius: 6px; background: #4f46e5; color: white; font-weight: 600; cursor: pointer; }
+    button.secondary { background: #e5e7eb; color: #111827; }
+    button:disabled { opacity: .55; cursor: default; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    #message { white-space: pre-wrap; }
+    .ok { color: #047857; }
+    .err { color: #b91c1c; }
+  </style>
+</head>
+<body>
+  <h1>Pi Chrome Connector</h1>
+  <div class="row muted">Extension ID<br><code id="extensionId">…</code></div>
+  <div class="row muted">Bridge<br><code id="bridgeUrl">…</code></div>
+  <div class="row">Status: <strong id="status">Checking…</strong></div>
+  <div class="row">
+    <label for="code">Pairing code from <code>/chrome pair</code></label>
+    <input id="code" placeholder="ABCD-1234" autocomplete="off" spellcheck="false">
+  </div>
+  <div class="actions">
+    <button id="pair">Pair</button>
+    <button id="start" class="secondary">Resume polling</button>
+    <button id="reset" class="secondary">Reset local key</button>
+  </div>
+  <p id="message" class="muted"></p>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -20,6 +20,11 @@
     "service_worker": "service_worker.js"
   },
   "action": {
-    "default_title": "Pi Chrome Connector"
+    "default_title": "Pi Chrome Connector",
+    "default_popup": "popup.html"
+  },
+  "options_ui": {
+    "page": "popup.html",
+    "open_in_tab": false
   }
 }

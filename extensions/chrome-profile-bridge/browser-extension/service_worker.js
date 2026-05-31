@@ -1,7 +1,196 @@
 const BRIDGE_URL = "http://127.0.0.1:17318";
 const CLIENT_NAME = `Pi Chrome Connector ${chrome.runtime.id}`;
 const POLL_ERROR_BACKOFF_MS = 2000;
+const AUTH_DB_NAME = "pi-chrome-auth";
+const AUTH_DB_VERSION = 1;
+const AUTH_STORE = "keys";
+const AUTH_KEY_ID = "auth-key-v1";
+const SESSION_REFRESH_SKEW_MS = 60_000;
 let polling = false;
+let cachedSession = null;
+
+function bytesToBase64url(bytes) {
+  let binary = "";
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  for (const byte of view) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function openAuthDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(AUTH_DB_NAME, AUTH_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(AUTH_STORE)) db.createObjectStore(AUTH_STORE);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Could not open auth IndexedDB"));
+  });
+}
+
+async function idbGet(key) {
+  const db = await openAuthDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(AUTH_STORE, "readonly");
+    const req = tx.objectStore(AUTH_STORE).get(key);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error || new Error("IndexedDB get failed"));
+    tx.oncomplete = () => db.close();
+  });
+}
+
+async function idbPut(key, value) {
+  const db = await openAuthDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(AUTH_STORE, "readwrite");
+    tx.objectStore(AUTH_STORE).put(value, key);
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onerror = () => { db.close(); reject(tx.error || new Error("IndexedDB put failed")); };
+  });
+}
+
+async function idbDelete(key) {
+  const db = await openAuthDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(AUTH_STORE, "readwrite");
+    tx.objectStore(AUTH_STORE).delete(key);
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onerror = () => { db.close(); reject(tx.error || new Error("IndexedDB delete failed")); };
+  });
+}
+
+async function ensureKeyPair() {
+  const existing = await idbGet(AUTH_KEY_ID);
+  if (existing?.privateKey && existing?.publicKeyJwk) return existing;
+
+  let privateKey;
+  let publicKeyJwk;
+  try {
+    // Preferred path: Chrome keeps the private key non-extractable and still lets us export the public key.
+    const keyPair = await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["sign", "verify"],
+    );
+    publicKeyJwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+    privateKey = keyPair.privateKey;
+  } catch (error) {
+    // Compatibility path for engines that apply extractable:false to the public key too.
+    // The persisted private CryptoKey is re-imported as non-extractable; private JWK material
+    // exists only transiently during first pairing in this extension context.
+    const keyPair = await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"],
+    );
+    publicKeyJwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+    const privateJwk = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
+    privateKey = await crypto.subtle.importKey("jwk", privateJwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+    delete privateJwk.d;
+  }
+
+  const record = {
+    algorithm: "ECDSA-P256-SHA256",
+    privateKey,
+    publicKeyJwk,
+    createdAt: Date.now(),
+  };
+  await idbPut(AUTH_KEY_ID, record);
+  return record;
+}
+
+async function pairWithCode(code) {
+  const record = await ensureKeyPair();
+  const response = await fetch(`${BRIDGE_URL}/pair`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-pi-chrome-extension-id": chrome.runtime.id },
+    body: JSON.stringify({
+      code,
+      extensionId: chrome.runtime.id,
+      clientName: CLIENT_NAME,
+      extensionVersion: chrome.runtime.getManifest().version,
+      publicKeyJwk: record.publicKeyJwk,
+    }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.ok === false) throw new Error(payload.error || `pair HTTP ${response.status}`);
+  await idbPut(AUTH_KEY_ID, { ...record, pairedAt: Date.now(), pairedExtension: payload.pairedExtension || null });
+  cachedSession = null;
+  await chrome.action.setBadgeText({ text: "pi" });
+  void pollLoop();
+  return payload;
+}
+
+async function resetAuthKey() {
+  cachedSession = null;
+  await idbDelete(AUTH_KEY_ID);
+  await chrome.action.setBadgeText({ text: "pair" });
+}
+
+async function getSessionToken() {
+  const now = Date.now();
+  if (cachedSession?.token && cachedSession.expiresAt - now > SESSION_REFRESH_SKEW_MS) return cachedSession.token;
+  const record = await idbGet(AUTH_KEY_ID);
+  if (!record?.privateKey) throw new Error("pair_required");
+  const challengeResponse = await fetch(`${BRIDGE_URL}/session/challenge`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-pi-chrome-extension-id": chrome.runtime.id },
+    body: JSON.stringify({ extensionId: chrome.runtime.id, clientName: CLIENT_NAME, extensionVersion: chrome.runtime.getManifest().version }),
+  });
+  const challenge = await challengeResponse.json().catch(() => ({}));
+  if (!challengeResponse.ok || challenge.ok === false) throw new Error(challenge.error || `session challenge HTTP ${challengeResponse.status}`);
+  const payloadBytes = new TextEncoder().encode(challenge.payload);
+  const signature = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, record.privateKey, payloadBytes);
+  const sessionResponse = await fetch(`${BRIDGE_URL}/session`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-pi-chrome-extension-id": chrome.runtime.id },
+    body: JSON.stringify({ extensionId: chrome.runtime.id, challengeId: challenge.challengeId, signature: bytesToBase64url(signature) }),
+  });
+  const session = await sessionResponse.json().catch(() => ({}));
+  if (!sessionResponse.ok || session.ok === false) throw new Error(session.error || `session HTTP ${sessionResponse.status}`);
+  cachedSession = { token: session.token, expiresAt: session.expiresAt };
+  await chrome.action.setBadgeText({ text: "pi" });
+  return cachedSession.token;
+}
+
+async function authenticatedFetch(url, options = {}) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const token = await getSessionToken();
+    const headers = { ...(options.headers || {}), authorization: `Bearer ${token}`, "x-pi-chrome-extension-id": chrome.runtime.id };
+    const response = await fetch(url, { ...options, headers });
+    if ((response.status === 401 || response.status === 403) && attempt === 0) {
+      cachedSession = null;
+      continue;
+    }
+    return response;
+  }
+  throw new Error("authenticated fetch failed");
+}
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  void (async () => {
+    try {
+      if (message?.type === "auth.status") {
+        const record = await idbGet(AUTH_KEY_ID);
+        sendResponse({ ok: true, extensionId: chrome.runtime.id, bridgeUrl: BRIDGE_URL, paired: !!record?.pairedAt, hasKey: !!record?.privateKey, sessionActive: !!cachedSession?.token });
+      } else if (message?.type === "auth.pair") {
+        sendResponse({ ok: true, result: await pairWithCode(String(message.code || "")) });
+      } else if (message?.type === "auth.reset") {
+        await resetAuthKey();
+        sendResponse({ ok: true });
+      } else if (message?.type === "poll.start") {
+        armKeepaliveAlarm();
+        void pollLoop();
+        sendResponse({ ok: true });
+      } else {
+        sendResponse({ ok: false, error: "unknown_message" });
+      }
+    } catch (error) {
+      sendResponse({ ok: false, error: error?.message || String(error) });
+    }
+  })();
+  return true;
+});
 
 // =================== Chrome input (CDP) layer ===================
 // Tracks which tabs we have attached chrome.debugger to.
@@ -627,10 +816,16 @@ async function pollLoop() {
   polling = true;
   try {
     while (true) {
-      const response = await fetch(`${BRIDGE_URL}/next?name=${encodeURIComponent(CLIENT_NAME)}`, {
+      const response = await authenticatedFetch(`${BRIDGE_URL}/next?name=${encodeURIComponent(CLIENT_NAME)}`, {
         cache: "no-store",
       });
-      if (!response.ok) throw new Error(`bridge /next HTTP ${response.status}`);
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        if (payload.error === "pair_required" || payload.error === "session_required") {
+          await chrome.action.setBadgeText({ text: "pair" });
+        }
+        throw new Error(payload.error || `bridge /next HTTP ${response.status}`);
+      }
       const expected = response.headers.get("x-pi-chrome-version");
       const ours = chrome.runtime.getManifest().version;
       if (expected && expected !== ours && isVersionOlder(ours, expected)) {
@@ -642,6 +837,10 @@ async function pollLoop() {
       if (payload.type === "command") await handleCommand(payload.command);
     }
   } catch (error) {
+    const message = String(error?.message || error);
+    if (/pair_required|session_required|origin_not_allowed|signature_invalid/i.test(message)) {
+      await chrome.action.setBadgeText({ text: "pair" });
+    }
     await sleep(POLL_ERROR_BACKOFF_MS);
   } finally {
     polling = false;
@@ -658,7 +857,7 @@ async function handleCommand(command) {
 }
 
 async function postResult(result) {
-  await fetch(`${BRIDGE_URL}/result`, {
+  await authenticatedFetch(`${BRIDGE_URL}/result`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(result),

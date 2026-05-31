@@ -24,13 +24,13 @@ That's Chrome's built-in warning when an extension uses `chrome.debugger`. pi-ch
 
 ## Can a malicious page escape and access my other tabs?
 
-No — pages cannot directly talk to extensions. Commands flow agent → local bridge (`127.0.0.1:17318`) → extension → tab. The bridge binds to loopback only and rejects browser-origin command requests, so ordinary web pages cannot use CORS to drive it.
+No — pages cannot directly talk to extensions. Commands flow agent → authenticated local bridge (`127.0.0.1:17318`) → paired extension → tab. The bridge defaults to off, binds to loopback only, rejects browser-origin command requests, requires a control capability for `/command`, and requires a paired extension session token for `/next` and `/result`.
 
-Chrome control is also locked per Pi session until you run `/chrome authorize`; `/chrome revoke` locks it again. The remaining risk surface is **other local processes running as you** that can connect to loopback and imitate Pi. If that's in your threat model, run pi-chrome in a separate OS user account.
+Chrome control is also locked per Pi session until you run `/chrome authorize`; `/chrome revoke` locks it again. The remaining risk surface is **local malware running as you** that can tamper with Pi, the Chrome profile, process memory, or extension files. If that's in your threat model, run pi-chrome in a separate OS user account.
 
 ## Can multiple Pi sessions use it at once?
 
-Yes. The first session opens the local bridge; later sessions detect it and pipe their commands through the same bridge. Each Pi session must be authorized with `/chrome authorize` before its chrome_* tools work.
+No. This hardened fork targets one active bridge server and one paired companion extension instance. The bridge server is off by default; use `/chrome server start` to turn it on and `/chrome server stop` to turn it off.
 
 ## Why ship as an unpacked extension?
 
@@ -47,7 +47,7 @@ pi-chrome ships as an unpacked extension so the source and broad browser permiss
 
 ## Can I script it without Pi?
 
-The Pi-facing tools are thin wrappers around an HTTP bridge at `127.0.0.1:17318`. You could call it directly from any process, but the API is internal and may change. If you need a stable scripting interface, file an issue and we'll consider stabilizing.
+The Pi-facing tools are thin wrappers around an authenticated HTTP bridge at `127.0.0.1:17318`. Direct scripting is not currently supported because `/command` requires an in-memory control capability and the extension endpoints require pairing/session authentication. If you need a stable scripting interface, file an issue and we'll consider stabilizing.
 
 ## What can humans do that pi-chrome cannot?
 

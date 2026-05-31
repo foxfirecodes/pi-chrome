@@ -2,6 +2,12 @@
 
 All notable user-facing changes to `pi-chrome`.
 
+## Unreleased
+
+- **Security hardening fork.** The Chrome bridge now defaults to off, adds `/chrome server start|stop|status`, and pairs one companion extension using `/chrome pair` plus a popup-entered one-time code.
+- **Authenticated bridge endpoints.** `/command`, `/next`, and `/result` now require capabilities; extension polling/results use WebCrypto challenge-response and short-lived in-memory session tokens.
+- **Request size limits.** Bridge JSON request bodies are capped to reduce local memory-pressure risk.
+
 ## 0.15.26 — 2026-05-16
 
 - **Documentation accuracy.** README, FAQ, examples, comparison, and test-suite docs now describe the 41-challenge suite, gate buckets, strict-CSP fallback, and current human-vs-extension limitations.

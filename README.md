@@ -161,18 +161,21 @@ pi-chrome is strongest on web-page workflows exposed through DOM, screenshots, t
 
 ### Authorization
 
-Chrome control is locked by default. Before any agent can use `chrome_*` tools, explicitly authorize the current Pi session from the terminal with `/chrome authorize`.
+Chrome control has two gates. First, the local bridge server is off by default and the companion extension must be paired. Then, before any agent can use `chrome_*` tools, explicitly authorize the current Pi session from the terminal with `/chrome authorize`.
 
 ```text
+/chrome server start       # turn on the local bridge server
+/chrome pair               # show a short-lived pairing code for the extension popup
+/chrome unpair             # forget the paired extension
 /chrome authorize          # default: authorize for 15 minutes
 /chrome authorize 30m      # authorize for 30 minutes
 /chrome authorize 45       # custom minutes
 /chrome authorize indefinite # authorize until revoked or Pi exits
 /chrome revoke             # lock again
-/chrome status             # shows connection + auth + background
+/chrome status             # shows server + pairing + connection + auth + background
 ```
 
-This protects your signed-in Chrome profile from accidental agent use. The loopback bridge also rejects browser-origin command requests so arbitrary web pages cannot call into `127.0.0.1:17318` through CORS.
+This protects your signed-in Chrome profile from accidental agent use. The loopback bridge requires authenticated capabilities on `/command`, `/next`, and `/result`, and pins polling/results to the paired extension origin so arbitrary web pages or unrelated extensions cannot drive the bridge.
 
 ### Run in background / watch modes
 
@@ -188,9 +191,11 @@ Per-call `background: true` wins over the session setting.
 
 ### Diagnostics
 
-- `/chrome doctor` — single command: connectivity, extension version, bridge owner, version drift, MAIN-world helper injection, `chrome_evaluate("1+1") === 2`, fingerprint flags.
+- `/chrome doctor` — single command: connectivity, extension version, version drift, MAIN-world helper injection, `chrome_evaluate("1+1") === 2`, fingerprint flags.
 - `/chrome onboard` — guided first-time setup.
-- `/chrome status` — current connection, authorization, and background state.
+- `/chrome server start|stop|status` — turn the loopback bridge on/off.
+- `/chrome pair` / `/chrome unpair` — pair or forget the companion extension.
+- `/chrome status` — current server, pairing, connection, authorization, and background state.
 - `/chrome background status` — current watch/background setting.
 
 If the loaded Chrome extension is older than `pi-chrome` on disk, `/chrome doctor` tells you to reload it from `chrome://extensions`.
@@ -201,17 +206,17 @@ If the loaded Chrome extension is older than `pi-chrome` on disk, `/chrome docto
 
 ```text
   +----------------------+                       +--------------------------+
-  |  Pi agent (terminal) |  -- 127.0.0.1:17318 ->|  Chrome extension        |
-  |  chrome_* tools      |                       |  (your real profile)     |
+  |  Pi agent (terminal) |  -- 127.0.0.1:17318 ->|  Paired Chrome extension |
+  |  chrome_* tools      |      authenticated    |  (your real profile)     |
   +-----------+----------+                       +-------------+------------+
-              |  same machine                                  |
+              |                                                |
               v                                                v
-   Other Pi sessions                          Tabs you already have open
-   share the same bridge                      (signed in to GitHub,
-   automatically                               Linear, Stripe, etc.)
+     One active bridge server                  Tabs you already have open
+                                               (signed in to GitHub,
+                                                Linear, Stripe, etc.)
 ```
 
-Multiple Pi sessions (planner / worker / audit) can all drive the same Chrome at once. The first session opens the local bridge; later sessions detect it and pipe their commands through.
+This fork targets one active bridge server and one paired companion extension instance. The bridge defaults to off; run `/chrome server start` or `/chrome pair` to turn it on.
 
 ---
 
@@ -242,9 +247,9 @@ If you build a competing tool, please open a PR with your scores. We benchmark i
 
 **Unpacked on purpose.** pi-chrome ships as an inspectable, MIT-licensed extension folder you load once with Developer Mode, so the local bridge and browser permissions are easy to audit and update without a Web Store release cycle. Every line is yours to read in [`extensions/chrome-profile-bridge/browser-extension/`](./extensions/chrome-profile-bridge/browser-extension). `/chrome doctor` reports the loaded extension version and warns when it drifts from your installed `pi-chrome`.
 
-The companion extension runs in the Chrome profile where you install it and has broad tab/scripting permissions. Only install it from a package source you trust. Even after install, `chrome_*` tools stay locked until you run `/chrome authorize` in Pi. Use `/chrome revoke` to lock them again.
+The companion extension runs in the Chrome profile where you install it and has broad tab/scripting permissions. Only install it from a package source you trust. Even after install, the bridge is off by default, the extension must pair with a one-time code, and `chrome_*` tools stay locked until you run `/chrome authorize` in Pi. Use `/chrome revoke` to lock tools again and `/chrome server stop` to shut down the loopback bridge.
 
-The Pi side listens on `127.0.0.1:17318` and rejects browser-origin command requests; ordinary web pages cannot use CORS to drive the bridge. The bundled Chrome extension currently polls that default port, so custom bridge ports are not supported without editing the extension source and reloading it.
+The Pi side listens on `127.0.0.1:17318` only after it is started. Pairing pins one exact `chrome-extension://<id>` origin and stores only the extension public key; short-lived in-memory session tokens protect extension polling/results. The bundled Chrome extension currently polls that default port, so custom bridge ports are not supported without editing the extension source and reloading it.
 
 There is no network exposure in the default configuration; the bridge binds to loopback only.
 

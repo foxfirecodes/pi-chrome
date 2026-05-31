@@ -1,8 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile as readFileAsync, rename, writeFile } from "node:fs/promises";
+import { createHash, createPublicKey, createVerify, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 /**
@@ -115,36 +117,226 @@ function summarizeActionResult(result: unknown): string | undefined {
 	return parts.length ? parts.join("; ") : undefined;
 }
 
-function readRequestBody(request: IncomingMessage): Promise<string> {
+class BodyTooLargeError extends Error {
+	constructor(readonly limitBytes: number) {
+		super(`Request body exceeds ${limitBytes} bytes`);
+	}
+}
+
+class InvalidJsonError extends Error {
+	constructor() {
+		super("Invalid JSON body");
+	}
+}
+
+const BODY_LIMIT_SMALL = 64 * 1024;
+const BODY_LIMIT_COMMAND = 1024 * 1024;
+const BODY_LIMIT_RESULT = 25 * 1024 * 1024;
+const PAIRING_TTL_MS = 5 * 60_000;
+const CHALLENGE_TTL_MS = 60_000;
+const EXTENSION_SESSION_TTL_MS = 5 * 60_000;
+const EXTENSION_SESSION_REFRESH_AFTER_MS = 4 * 60_000;
+const AUTH_PAYLOAD_PREFIX = "PI_CHROME_AUTH_V1";
+
+type PairedExtension = {
+	id: string;
+	origin: string;
+	publicKeyJwk: Record<string, unknown>;
+	publicKeyFingerprint: string;
+	pairedAt: string;
+	clientName?: string;
+	extensionVersion?: string;
+};
+
+type AuthStore = {
+	version: 1;
+	pairedExtension?: PairedExtension;
+};
+
+type PairingState = {
+	codeHash: Buffer;
+	codeDisplay: string;
+	expiresAt: number;
+};
+
+type AuthChallenge = {
+	extensionId: string;
+	origin: string;
+	payload: string;
+	expiresAt: number;
+};
+
+type ExtensionSession = {
+	tokenHash: Buffer;
+	extensionId: string;
+	origin: string;
+	expiresAt: number;
+};
+
+function base64url(bytes: Buffer): string {
+	return bytes.toString("base64url");
+}
+
+function randomToken(bytes = 32): string {
+	return base64url(randomBytes(bytes));
+}
+
+function sha256Buffer(value: string): Buffer {
+	return createHash("sha256").update(value).digest();
+}
+
+function sha256Base64url(value: string): string {
+	return base64url(sha256Buffer(value));
+}
+
+function safeEqualString(a: string, b: string): boolean {
+	const ab = Buffer.from(a);
+	const bb = Buffer.from(b);
+	return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
+
+function readRequestBody(request: IncomingMessage, maxBytes: number): Promise<string> {
 	return new Promise((resolveBody, rejectBody) => {
+		const contentLength = Number(request.headers["content-length"] ?? "0");
+		if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+			rejectBody(new BodyTooLargeError(maxBytes));
+			return;
+		}
 		const chunks: Buffer[] = [];
-		request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-		request.on("end", () => resolveBody(Buffer.concat(chunks).toString("utf8")));
+		let total = 0;
+		let rejected = false;
+		request.on("data", (chunk) => {
+			if (rejected) return;
+			const buffer = Buffer.from(chunk);
+			total += buffer.length;
+			if (total > maxBytes) {
+				rejected = true;
+				rejectBody(new BodyTooLargeError(maxBytes));
+				return;
+			}
+			chunks.push(buffer);
+		});
+		request.on("end", () => {
+			if (!rejected) resolveBody(Buffer.concat(chunks).toString("utf8"));
+		});
 		request.on("error", rejectBody);
 	});
 }
 
-function corsHeadersFor(request: IncomingMessage): Record<string, string> {
+async function readJsonBody<T>(request: IncomingMessage, maxBytes: number): Promise<T> {
+	const text = await readRequestBody(request, maxBytes);
+	try {
+		return JSON.parse(text || "{}") as T;
+	} catch {
+		throw new InvalidJsonError();
+	}
+}
+
+function extensionOriginFromId(extensionId: string): string {
+	return `chrome-extension://${extensionId}`;
+}
+
+function isChromeExtensionOrigin(origin: string): boolean {
+	return /^chrome-extension:\/\/[a-p]{32}$/.test(origin);
+}
+
+function corsHeadersFor(request: IncomingMessage, pairedOrigin: string | undefined, path: string): Record<string, string> {
 	const origin = String(request.headers.origin ?? "");
-	if (!origin.startsWith("chrome-extension://")) return {};
+	if (!origin) return {};
+	const allowPairing = path === "/pair" && isChromeExtensionOrigin(origin);
+	const allowPaired = !!pairedOrigin && origin === pairedOrigin;
+	if (!allowPairing && !allowPaired) return {};
 	return {
 		"access-control-allow-origin": origin,
 		"access-control-allow-methods": "GET,POST,OPTIONS",
-		"access-control-allow-headers": "content-type",
+		"access-control-allow-headers": "content-type, authorization, x-pi-chrome-extension-id",
 		"access-control-expose-headers": "x-pi-chrome-version",
 		"vary": "origin",
 	};
 }
 
-function isBrowserOriginAllowed(request: IncomingMessage): boolean {
-	const origin = String(request.headers.origin ?? "");
-	if (origin) return origin.startsWith("chrome-extension://");
-	const secFetchSite = String(request.headers["sec-fetch-site"] ?? "");
-	return !secFetchSite || secFetchSite === "none" || secFetchSite === "same-origin";
+function requestOrigin(request: IncomingMessage): string {
+	return String(request.headers.origin ?? "");
+}
+
+function extensionIdHeader(request: IncomingMessage): string {
+	return String(request.headers["x-pi-chrome-extension-id"] ?? "");
+}
+
+function isExtensionOriginAllowed(request: IncomingMessage, pairedOrigin: string | undefined, path: string): boolean {
+	const origin = requestOrigin(request);
+	// Chrome extension service-worker fetches to localhost may omit Origin entirely.
+	// Treat Origin as an extra check when present, not as the primary authenticator.
+	if (!origin) return true;
+	if (path === "/pair") return isChromeExtensionOrigin(origin);
+	return !!pairedOrigin && origin === pairedOrigin;
 }
 
 function isLocalProcessRequest(request: IncomingMessage): boolean {
 	return !request.headers.origin && !request.headers["sec-fetch-site"];
+}
+
+function bearerToken(request: IncomingMessage): string | undefined {
+	const value = String(request.headers.authorization ?? "");
+	const match = value.match(/^Bearer\s+(.+)$/i);
+	return match?.[1];
+}
+
+function authConfigDir(): string {
+	if (process.env.PI_CHROME_AUTH_DIR) return process.env.PI_CHROME_AUTH_DIR;
+	if (process.platform === "darwin") return join(homedir(), "Library", "Application Support", "pi-chrome");
+	if (process.platform === "win32" && process.env.APPDATA) return join(process.env.APPDATA, "pi-chrome");
+	return join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "pi-chrome");
+}
+
+function authStorePath(): string {
+	return join(authConfigDir(), "bridge-auth.json");
+}
+
+async function loadAuthStore(): Promise<AuthStore> {
+	try {
+		const parsed = JSON.parse(await readFileAsync(authStorePath(), "utf8")) as AuthStore;
+		if (parsed && parsed.version === 1) return parsed;
+	} catch {}
+	return { version: 1 };
+}
+
+async function saveAuthStore(store: AuthStore): Promise<void> {
+	const dir = authConfigDir();
+	await mkdir(dir, { recursive: true, mode: 0o700 });
+	const path = authStorePath();
+	const tmp = `${path}.${process.pid}.tmp`;
+	await writeFile(tmp, JSON.stringify(store, null, 2), { mode: 0o600 });
+	await rename(tmp, path);
+}
+
+function normalizePairingCode(code: string): string {
+	return code.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function displayPairingCode(raw: string): string {
+	return `${raw.slice(0, 4)}-${raw.slice(4)}`;
+}
+
+function makePairingCode(): string {
+	const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+	let out = "";
+	const bytes = randomBytes(8);
+	for (const byte of bytes) out += alphabet[byte % alphabet.length];
+	return out;
+}
+
+function validatePublicJwk(jwk: unknown): Record<string, unknown> {
+	if (!jwk || typeof jwk !== "object") throw new Error("Missing publicKeyJwk");
+	const key = jwk as Record<string, unknown>;
+	if (key.kty !== "EC" || key.crv !== "P-256" || typeof key.x !== "string" || typeof key.y !== "string") {
+		throw new Error("publicKeyJwk must be an ECDSA P-256 public key");
+	}
+	return key;
+}
+
+function publicKeyFingerprint(jwk: Record<string, unknown>): string {
+	return `sha256:${sha256Base64url(JSON.stringify(jwk))}`;
 }
 
 function sendJson(response: ServerResponse, status: number, body: unknown, extraHeaders?: Record<string, string>): void {
@@ -163,7 +355,12 @@ class ChromeProfileBridge {
 	private waiters: Array<(command: BridgeCommand | undefined) => void> = [];
 	private lastSeenAt: number | undefined;
 	private clientName: string | undefined;
-	private mode: "server" | "client" | undefined;
+	private mode: "server" | undefined;
+	private controlToken = randomToken();
+	private authStore: AuthStore = { version: 1 };
+	private pairing: PairingState | undefined;
+	private challenges = new Map<string, AuthChallenge>();
+	private extensionSessions = new Map<string, ExtensionSession>();
 
 	constructor(
 		private readonly host: string,
@@ -182,22 +379,45 @@ class ChromeProfileBridge {
 	}
 
 	status(): Record<string, unknown> {
+		const paired = this.authStore.pairedExtension;
 		return {
 			url: this.url,
-			mode: this.mode ?? "starting",
+			mode: this.mode ?? "off",
+			listening: !!this.server,
 			connected: this.connected,
 			lastSeenAt: this.lastSeenAt,
 			clientName: this.clientName,
 			queuedCommands: this.queue.length,
 			pendingCommands: this.pending.size,
+			controlAuth: "enabled",
+			paired: !!paired,
+			pairedExtensionId: paired?.id,
+			pairedOrigin: paired?.origin,
+			pairedFingerprint: paired?.publicKeyFingerprint,
+			activePairingExpiresAt: this.pairing?.expiresAt,
+			activeExtensionSessions: this.extensionSessions.size,
 		};
 	}
 
+	async loadAuth(): Promise<void> {
+		this.authStore = await loadAuthStore();
+	}
+
 	async start(): Promise<void> {
-		if (this.server || this.mode === "client") return;
+		if (this.server) return;
+		await this.loadAuth();
+		this.controlToken = randomToken();
 		this.server = createServer((request, response) => {
 			void this.handle(request, response).catch((error) => {
-				sendJson(response, 500, { error: (error as Error).message });
+				if (error instanceof BodyTooLargeError) {
+					sendJson(response, 413, { ok: false, error: error.message });
+					return;
+				}
+				if (error instanceof InvalidJsonError) {
+					sendJson(response, 400, { ok: false, error: error.message });
+					return;
+				}
+				sendJson(response, 500, { ok: false, error: (error as Error).message });
 			});
 		});
 		try {
@@ -212,18 +432,15 @@ class ChromeProfileBridge {
 		} catch (error) {
 			this.server.close();
 			this.server = undefined;
-			if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
-			// Another Pi session already owns the bridge port. Use it as the shared
-			// machine-local broker so multiple Pi sessions can control Chrome at once.
-			this.mode = "client";
+			this.mode = undefined;
+			if ((error as NodeJS.ErrnoException).code === "EADDRINUSE") {
+				throw new Error(`Chrome bridge port ${this.host}:${this.port} is already in use. Stop the other pi-chrome server before starting this one.`);
+			}
+			throw error;
 		}
 	}
 
 	stop(): void {
-		if (this.mode === "client") {
-			this.mode = undefined;
-			return;
-		}
 		for (const pending of this.pending.values()) {
 			clearTimeout(pending.timer);
 			pending.reject(new Error("Chrome profile bridge stopped"));
@@ -235,10 +452,18 @@ class ChromeProfileBridge {
 		this.server?.close();
 		this.server = undefined;
 		this.mode = undefined;
+		this.lastSeenAt = undefined;
+		this.clientName = undefined;
+		this.pairing = undefined;
+		this.challenges.clear();
+		this.extensionSessions.clear();
+		this.controlToken = randomToken();
 	}
 
 	send(action: string, params: Record<string, unknown>, timeoutMs = DEFAULT_TIMEOUT_MS, signal?: AbortSignal): Promise<unknown> {
-		if (this.mode === "client") return this.sendViaOwner(action, params, timeoutMs, signal);
+		if (this.mode !== "server" || !this.server) {
+			throw new Error("Chrome bridge server is off. Run /chrome server start, then pair/connect the companion extension.");
+		}
 		return this.sendLocal(action, params, timeoutMs, signal);
 	}
 
@@ -281,40 +506,6 @@ class ChromeProfileBridge {
 		});
 	}
 
-	private async sendViaOwner(action: string, params: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal): Promise<unknown> {
-		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort(), timeoutMs + 2_000);
-		const forwardAbort = () => controller.abort();
-		if (signal) {
-			if (signal.aborted) controller.abort();
-			else signal.addEventListener("abort", forwardAbort, { once: true });
-		}
-		try {
-			const response = await fetch(`${this.url}/command`, {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ action, params, timeoutMs }),
-				signal: controller.signal,
-			});
-			const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; result?: unknown; error?: string };
-			if (response.status === 404) {
-				throw new Error(
-					"A running Pi session owns the Chrome bridge but is using an older pi-chrome without multi-session support. Restart that Pi session after `pi update`, then retry.",
-				);
-			}
-			if (!response.ok || !payload.ok) throw new Error(payload.error ?? `Chrome bridge owner HTTP ${response.status}`);
-			return payload.result;
-		} catch (error) {
-			if ((error as Error).name === "AbortError") {
-				if (signal?.aborted) throw new Error("Chrome command aborted");
-				throw new Error(`Timed out waiting for shared Chrome bridge owner after ${timeoutMs}ms`);
-			}
-			throw error;
-		} finally {
-			clearTimeout(timer);
-			if (signal) signal.removeEventListener("abort", forwardAbort);
-		}
-	}
 
 	private enqueue(command: BridgeCommand): void {
 		const waiter = this.waiters.shift();
@@ -322,12 +513,177 @@ class ChromeProfileBridge {
 		else this.queue.push(command);
 	}
 
+	startPairing(ttlMs = PAIRING_TTL_MS): { code: string; expiresAt: number } {
+		const normalizedCode = makePairingCode();
+		const expiresAt = Date.now() + Math.max(30_000, Math.min(ttlMs, 10 * 60_000));
+		this.pairing = {
+			codeHash: sha256Buffer(normalizedCode),
+			codeDisplay: displayPairingCode(normalizedCode),
+			expiresAt,
+		};
+		return { code: this.pairing.codeDisplay, expiresAt };
+	}
+
+	async unpair(): Promise<void> {
+		this.authStore = { version: 1 };
+		this.pairing = undefined;
+		this.challenges.clear();
+		this.extensionSessions.clear();
+		await saveAuthStore(this.authStore);
+	}
+
+	private pairedOrigin(): string | undefined {
+		return this.authStore.pairedExtension?.origin;
+	}
+
+	private requireControlToken(request: IncomingMessage): boolean {
+		const token = bearerToken(request);
+		return !!token && safeEqualString(token, this.controlToken);
+	}
+
+	private requireExtensionSession(request: IncomingMessage): { ok: true } | { ok: false; status: number; error: string } {
+		const paired = this.authStore.pairedExtension;
+		const origin = requestOrigin(request);
+		const extensionId = extensionIdHeader(request);
+		if (!paired) return { ok: false, status: 401, error: "pair_required" };
+		if (origin && origin !== paired.origin) return { ok: false, status: 403, error: "origin_not_allowed" };
+		if (extensionId && extensionId !== paired.id) return { ok: false, status: 403, error: "extension_not_allowed" };
+		const token = bearerToken(request);
+		if (!token) return { ok: false, status: 401, error: "session_required" };
+		const session = this.extensionSessions.get(sha256Base64url(token));
+		if (!session || session.extensionId !== paired.id || session.origin !== paired.origin) {
+			return { ok: false, status: 401, error: "session_required" };
+		}
+		if (session.expiresAt <= Date.now()) {
+			this.extensionSessions.delete(sha256Base64url(token));
+			return { ok: false, status: 401, error: "session_expired" };
+		}
+		return { ok: true };
+	}
+
+	private authPayload(challengeId: string, challenge: string, extensionId: string, origin: string, expiresAt: number): string {
+		return [AUTH_PAYLOAD_PREFIX, challengeId, challenge, extensionId, origin, this.url, String(expiresAt)].join("\n");
+	}
+
+	private verifyChallengeSignature(paired: PairedExtension, payload: string, signature: string): boolean {
+		try {
+			const publicKey = createPublicKey({ key: paired.publicKeyJwk, format: "jwk" } as any);
+			const signatureBytes = Buffer.from(signature, "base64url");
+			for (const options of [{ key: publicKey, dsaEncoding: "ieee-p1363" as const }, publicKey] as any[]) {
+				const verifier = createVerify("sha256");
+				verifier.update(payload);
+				verifier.end();
+				try {
+					if (verifier.verify(options, signatureBytes)) return true;
+				} catch {}
+			}
+			return false;
+		} catch {
+			return false;
+		}
+	}
+
+	private async handlePair(request: IncomingMessage, response: ServerResponse, corsHeaders: Record<string, string>): Promise<void> {
+		const body = await readJsonBody<{
+			code?: string;
+			extensionId?: string;
+			clientName?: string;
+			extensionVersion?: string;
+			publicKeyJwk?: unknown;
+		}>(request, BODY_LIMIT_SMALL);
+		const origin = requestOrigin(request);
+		const extensionId = String(body.extensionId ?? extensionIdHeader(request) ?? "");
+		const expectedOrigin = extensionOriginFromId(extensionId);
+		if (!extensionId || (origin && origin !== expectedOrigin)) {
+			sendJson(response, 403, { ok: false, error: "origin_extension_mismatch" }, corsHeaders);
+			return;
+		}
+		if (!this.pairing || this.pairing.expiresAt <= Date.now()) {
+			this.pairing = undefined;
+			sendJson(response, 401, { ok: false, error: "pairing_code_expired" }, corsHeaders);
+			return;
+		}
+		const normalizedCode = normalizePairingCode(String(body.code ?? ""));
+		const codeHash = sha256Buffer(normalizedCode);
+		if (!normalizedCode || codeHash.length !== this.pairing.codeHash.length || !timingSafeEqual(codeHash, this.pairing.codeHash)) {
+			sendJson(response, 401, { ok: false, error: "pairing_code_invalid" }, corsHeaders);
+			return;
+		}
+		const publicKeyJwk = validatePublicJwk(body.publicKeyJwk);
+		const pairedExtension: PairedExtension = {
+			id: extensionId,
+			origin: expectedOrigin,
+			publicKeyJwk,
+			publicKeyFingerprint: publicKeyFingerprint(publicKeyJwk),
+			pairedAt: new Date().toISOString(),
+			clientName: body.clientName ? String(body.clientName) : undefined,
+			extensionVersion: body.extensionVersion ? String(body.extensionVersion) : undefined,
+		};
+		this.authStore = { version: 1, pairedExtension };
+		this.pairing = undefined;
+		this.extensionSessions.clear();
+		this.challenges.clear();
+		await saveAuthStore(this.authStore);
+		sendJson(response, 200, { ok: true, pairedExtension: { id: pairedExtension.id, fingerprint: pairedExtension.publicKeyFingerprint } }, corsHeaders);
+	}
+
+	private async handleSessionChallenge(request: IncomingMessage, response: ServerResponse, corsHeaders: Record<string, string>): Promise<void> {
+		const paired = this.authStore.pairedExtension;
+		if (!paired) {
+			sendJson(response, 401, { ok: false, error: "pair_required" }, corsHeaders);
+			return;
+		}
+		const body = await readJsonBody<{ extensionId?: string }>(request, BODY_LIMIT_SMALL);
+		const origin = requestOrigin(request);
+		const extensionId = String(body.extensionId ?? extensionIdHeader(request) ?? "");
+		if ((origin && origin !== paired.origin) || extensionId !== paired.id) {
+			sendJson(response, 403, { ok: false, error: "origin_not_allowed" }, corsHeaders);
+			return;
+		}
+		const challengeId = randomToken(18);
+		const challenge = randomToken(32);
+		const expiresAt = Date.now() + CHALLENGE_TTL_MS;
+		const payload = this.authPayload(challengeId, challenge, paired.id, paired.origin, expiresAt);
+		this.challenges.set(challengeId, { extensionId: paired.id, origin: paired.origin, payload, expiresAt });
+		sendJson(response, 200, { ok: true, challengeId, challenge, expiresAt, serverTime: Date.now(), payload }, corsHeaders);
+	}
+
+	private async handleSession(request: IncomingMessage, response: ServerResponse, corsHeaders: Record<string, string>): Promise<void> {
+		const paired = this.authStore.pairedExtension;
+		if (!paired) {
+			sendJson(response, 401, { ok: false, error: "pair_required" }, corsHeaders);
+			return;
+		}
+		const body = await readJsonBody<{ extensionId?: string; challengeId?: string; signature?: string }>(request, BODY_LIMIT_SMALL);
+		const origin = requestOrigin(request);
+		const extensionId = String(body.extensionId ?? extensionIdHeader(request) ?? "");
+		const challengeId = String(body.challengeId ?? "");
+		const challenge = this.challenges.get(challengeId);
+		this.challenges.delete(challengeId);
+		if ((origin && origin !== paired.origin) || extensionId !== paired.id || !challenge || challenge.origin !== paired.origin || challenge.extensionId !== paired.id) {
+			sendJson(response, 403, { ok: false, error: "challenge_invalid" }, corsHeaders);
+			return;
+		}
+		if (challenge.expiresAt <= Date.now()) {
+			sendJson(response, 401, { ok: false, error: "challenge_expired" }, corsHeaders);
+			return;
+		}
+		if (!body.signature || !this.verifyChallengeSignature(paired, challenge.payload, body.signature)) {
+			sendJson(response, 401, { ok: false, error: "signature_invalid" }, corsHeaders);
+			return;
+		}
+		const token = randomToken();
+		const expiresAt = Date.now() + EXTENSION_SESSION_TTL_MS;
+		this.extensionSessions.set(sha256Base64url(token), { tokenHash: sha256Buffer(token), extensionId: paired.id, origin: paired.origin, expiresAt });
+		sendJson(response, 200, { ok: true, token, expiresAt, serverTime: Date.now(), refreshAfterMs: EXTENSION_SESSION_REFRESH_AFTER_MS }, corsHeaders);
+	}
+
 	private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
 		const url = new URL(request.url ?? "/", this.url);
-		const corsHeaders = corsHeadersFor(request);
+		const corsHeaders = corsHeadersFor(request, this.pairedOrigin(), url.pathname);
 		if (request.method === "OPTIONS") {
-			if (!isBrowserOriginAllowed(request)) {
-				sendJson(response, 403, { ok: false, error: "browser origin not allowed" });
+			if (!isExtensionOriginAllowed(request, this.pairedOrigin(), url.pathname)) {
+				sendJson(response, 403, { ok: false, error: "origin_not_allowed" });
 				return;
 			}
 			sendJson(response, 200, { ok: true }, corsHeaders);
@@ -337,16 +693,44 @@ class ChromeProfileBridge {
 			sendJson(response, 200, this.status());
 			return;
 		}
+		if (request.method === "POST" && url.pathname === "/pair") {
+			if (!isExtensionOriginAllowed(request, this.pairedOrigin(), url.pathname)) {
+				sendJson(response, 403, { ok: false, error: "origin_not_allowed" }, corsHeaders);
+				return;
+			}
+			await this.handlePair(request, response, corsHeaders);
+			return;
+		}
+		if (request.method === "POST" && url.pathname === "/session/challenge") {
+			if (!isExtensionOriginAllowed(request, this.pairedOrigin(), url.pathname)) {
+				sendJson(response, 403, { ok: false, error: "origin_not_allowed" }, corsHeaders);
+				return;
+			}
+			await this.handleSessionChallenge(request, response, corsHeaders);
+			return;
+		}
+		if (request.method === "POST" && url.pathname === "/session") {
+			if (!isExtensionOriginAllowed(request, this.pairedOrigin(), url.pathname)) {
+				sendJson(response, 403, { ok: false, error: "origin_not_allowed" }, corsHeaders);
+				return;
+			}
+			await this.handleSession(request, response, corsHeaders);
+			return;
+		}
 		if (request.method === "POST" && url.pathname === "/command") {
 			if (!isLocalProcessRequest(request)) {
 				sendJson(response, 403, { ok: false, error: "Chrome commands are accepted only from local Pi processes" });
 				return;
 			}
-			const body = JSON.parse(await readRequestBody(request)) as {
+			if (!this.requireControlToken(request)) {
+				sendJson(response, 401, { ok: false, error: "control_auth_required" });
+				return;
+			}
+			const body = await readJsonBody<{
 				action?: string;
 				params?: Record<string, unknown>;
 				timeoutMs?: number;
-			};
+			}>(request, BODY_LIMIT_COMMAND);
 			if (!body.action) {
 				sendJson(response, 400, { ok: false, error: "Missing command action" });
 				return;
@@ -360,8 +744,9 @@ class ChromeProfileBridge {
 			return;
 		}
 		if (request.method === "GET" && url.pathname === "/next") {
-			if (!isBrowserOriginAllowed(request)) {
-				sendJson(response, 403, { ok: false, error: "browser origin not allowed" });
+			const session = this.requireExtensionSession(request);
+			if (!session.ok) {
+				sendJson(response, session.status, { ok: false, error: session.error }, corsHeaders);
 				return;
 			}
 			this.lastSeenAt = Date.now();
@@ -397,12 +782,13 @@ class ChromeProfileBridge {
 			return;
 		}
 		if (request.method === "POST" && url.pathname === "/result") {
-			if (!isBrowserOriginAllowed(request)) {
-				sendJson(response, 403, { ok: false, error: "browser origin not allowed" });
+			const session = this.requireExtensionSession(request);
+			if (!session.ok) {
+				sendJson(response, session.status, { ok: false, error: session.error }, corsHeaders);
 				return;
 			}
 			this.lastSeenAt = Date.now();
-			const result = JSON.parse(await readRequestBody(request)) as BridgeResult;
+			const result = await readJsonBody<BridgeResult>(request, BODY_LIMIT_RESULT);
 			const pending = this.pending.get(result.id);
 			if (!pending) {
 				sendJson(response, 404, { ok: false, error: "unknown command id" }, corsHeaders);
@@ -580,7 +966,7 @@ export default function (pi: ExtensionAPI): void {
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
-		await bridge.start();
+		await bridge.loadAuth();
 		updateChromeStatus(ctx);
 	});
 
@@ -620,12 +1006,60 @@ Usage rules:
 	});
 
 	// Shared handlers, dispatched by the unified /chrome command below.
+	const serverHandler = async (ctx: ExtensionContext, args: string) => {
+		const action = (args || "status").trim().toLowerCase();
+		if (action === "start" || action === "on") {
+			try {
+				await bridge.start();
+				ctx.ui.notify(`Chrome bridge server started at ${bridge.url}. Next: load the extension and run /chrome pair.`, "info");
+			} catch (error) {
+				ctx.ui.notify(`Chrome bridge server failed to start: ${(error as Error).message}`, "warning");
+			}
+			return;
+		}
+		if (action === "stop" || action === "off") {
+			bridge.stop();
+			ctx.ui.notify("Chrome bridge server stopped. Active extension sessions and pending commands were cleared.", "info");
+			return;
+		}
+		if (action === "status") {
+			const status = bridge.status();
+			ctx.ui.notify(`Chrome bridge server is ${status.mode === "server" ? "on" : "off"} at ${bridge.url}. paired=${status.paired ? "yes" : "no"}, connected=${status.connected ? "yes" : "no"}.`, "info");
+			return;
+		}
+		ctx.ui.notify("Unknown server setting. Use /chrome server start | stop | status.", "warning");
+	};
+
+	const pairHandler = async (ctx: ExtensionContext) => {
+		try {
+			await bridge.start();
+		} catch (error) {
+			ctx.ui.notify(`Chrome bridge server failed to start: ${(error as Error).message}`, "warning");
+			return;
+		}
+		const { code, expiresAt } = bridge.startPairing();
+		const minutes = Math.max(1, Math.ceil((expiresAt - Date.now()) / 60_000));
+		ctx.ui.notify(
+			`Pairing code: ${code}\n\nOpen the Pi Chrome Connector extension popup in Chrome, enter this code, and click Pair. This code expires in ~${minutes}m.`,
+			"info",
+		);
+	};
+
+	const unpairHandler = async (ctx: ExtensionContext) => {
+		const ok = await ctx.ui.confirm(
+			"Unpair Chrome extension?",
+			"This deletes the stored extension public key and invalidates active extension sessions. You will need to run /chrome pair again.",
+		);
+		if (!ok) return;
+		await bridge.unpair();
+		ctx.ui.notify("Chrome extension unpaired. Run /chrome pair to pair again.", "info");
+	};
+
 	const doctorHandler = async (ctx: ExtensionContext) => {
 			ctx.ui.notify("Checking pi-chrome…", "info");
 			const lines: string[] = [`pi-chrome v${PI_CHROME_VERSION}`];
 			const status = bridge.status();
-			const roleLabel = status.mode === "client" ? "sharing another pi session's connection" : "running the Chrome connection for this machine";
-			lines.push(`• This pi session is ${roleLabel}.`);
+			lines.push(`• Bridge server: ${status.mode === "server" ? "on" : "off"}; paired extension: ${status.paired ? "yes" : "no"}.`);
 			let extensionAlive = false;
 			let versionMismatch = false;
 			try {
@@ -651,10 +1085,12 @@ Usage rules:
 			} catch (error) {
 				const message = (error as Error).message;
 				lines.push(`✗ Chrome isn't responding: ${message}`);
-				if (message.includes("older pi-chrome without multi-session")) {
-					lines.push("  Fix: quit and restart the pi session that first opened the Chrome connection (it was on an older pi-chrome).");
+				if (status.mode !== "server") {
+					lines.push("  Fix: run /chrome server start. If this is first-time setup, run /chrome onboard and /chrome pair too.");
+				} else if (!status.paired) {
+					lines.push("  Fix: run /chrome pair, then enter the code in the Chrome extension popup.");
 				} else {
-					lines.push("  Fix: run /chrome onboard to install the Chrome companion extension, then keep that Chrome window open.");
+					lines.push("  Fix: keep Chrome open with the paired extension loaded, or run /chrome onboard if it is not installed.");
 				}
 			}
 
@@ -765,7 +1201,7 @@ Usage rules:
 			await pi.exec("sh", ["-lc", `printf %s ${JSON.stringify(extensionPath)} | pbcopy`], { cwd: workspaceCwd(ctx), timeout: 5_000 }).catch(() => undefined);
 		}
 		ctx.ui.notify(
-			"Chrome and Finder should be open. The extension folder path is on your clipboard. After you click 'Load unpacked' and pick it, run /chrome doctor to confirm everything is connected.",
+			"Chrome and Finder should be open. The extension folder path is on your clipboard. After you click 'Load unpacked' and pick it, run /chrome server start, then /chrome pair and enter the code in the extension popup.",
 			"info",
 		);
 	};
@@ -774,15 +1210,22 @@ Usage rules:
 	// picker and as the body of /chrome status.
 	const statusSummary = async (): Promise<string> => {
 		const parts: string[] = [];
-		try {
-			const version = (await bridge.send("tab.version", {}, 5_000)) as { extensionVersion?: string };
-			if (version.extensionVersion && version.extensionVersion !== PI_CHROME_VERSION) {
-				parts.push(`⚠ Chrome extension v${version.extensionVersion} (pi-chrome v${PI_CHROME_VERSION}, reload extension)`);
-			} else {
-				parts.push(`✓ Chrome connected`);
+		const bridgeStatus = bridge.status();
+		parts.push(`server: ${bridgeStatus.mode === "server" ? "on" : "off"}`);
+		parts.push(`paired: ${bridgeStatus.paired ? "yes" : "no"}`);
+		if (bridgeStatus.mode === "server") {
+			try {
+				const version = (await bridge.send("tab.version", {}, 5_000)) as { extensionVersion?: string };
+				if (version.extensionVersion && version.extensionVersion !== PI_CHROME_VERSION) {
+					parts.push(`⚠ Chrome extension v${version.extensionVersion} (pi-chrome v${PI_CHROME_VERSION}, reload extension)`);
+				} else {
+					parts.push(`✓ Chrome connected`);
+				}
+			} catch {
+				parts.push(`✗ Chrome not responding`);
 			}
-		} catch {
-			parts.push(`✗ Chrome not responding`);
+		} else {
+			parts.push(`Chrome bridge off`);
 		}
 		parts.push(`auth: ${authSummary()}`);
 		parts.push(`background: ${backgroundDefault ? "on" : "off"}`);
@@ -832,6 +1275,10 @@ Usage rules:
 		while (true) {
 			ctx.ui.notify("Checking Chrome connection…", "info");
 			const choice = await ctx.ui.select(`pi-chrome\n${await statusSummary()}`, [
+				"Start bridge server",
+				"Stop bridge server",
+				"Pair extension…",
+				"Unpair extension…",
 				"Authorize Chrome control…",
 				"Lock Chrome control",
 				"Doctor / troubleshoot",
@@ -840,6 +1287,10 @@ Usage rules:
 			]);
 			if (!choice) return;
 			switch (choice) {
+				case "Start bridge server": return serverHandler(ctx, "start");
+				case "Stop bridge server": return serverHandler(ctx, "stop");
+				case "Pair extension…": return pairHandler(ctx);
+				case "Unpair extension…": return unpairHandler(ctx);
 				case "Authorize Chrome control…": await openAuthorizeMenu(ctx); continue;
 				case "Lock Chrome control": return revokeHandler(ctx);
 				case "Doctor / troubleshoot": return doctorHandler(ctx);
@@ -851,7 +1302,7 @@ Usage rules:
 
 	pi.registerCommand("chrome", {
 		description:
-			"All pi-chrome controls in one place.\n  /chrome authorize [15m|30m|<minutes>|indefinite] — allow this Pi session to use chrome_* tools.\n  /chrome revoke   — lock Chrome control.\n  /chrome status   — one-line snapshot of connection, auth, and background setting.\n  /chrome doctor   — full health check.\n  /chrome onboard  — install the Chrome companion extension.\n  /chrome background [on|off|status|toggle] — whether pi-chrome runs without focusing Chrome.\nRun with no arguments for an interactive picker that shows current state.",
+			"All pi-chrome controls in one place.\n  /chrome server [start|stop|status] — turn the local bridge server on/off (default off).\n  /chrome pair     — show a one-time code for the Chrome extension popup.\n  /chrome unpair   — forget the paired Chrome extension.\n  /chrome authorize [15m|30m|<minutes>|indefinite] — allow this Pi session to use chrome_* tools.\n  /chrome revoke   — lock Chrome control.\n  /chrome status   — one-line snapshot of connection, auth, and background setting.\n  /chrome doctor   — full health check.\n  /chrome onboard  — install the Chrome companion extension.\n  /chrome background [on|off|status|toggle] — whether pi-chrome runs without focusing Chrome.\nRun with no arguments for an interactive picker that shows current state.",
 		getArgumentCompletions: (prefix) => {
 			const raw = prefix;
 			const trimmedRight = raw.replace(/\s+$/, "");
@@ -868,6 +1319,9 @@ Usage rules:
 			let candidates: Item[] = [];
 			if (path.length === 0) {
 				candidates = [
+					{ fullValue: "server", label: "server", description: "Turn the local bridge server on/off (default off)." },
+					{ fullValue: "pair", label: "pair", description: "Show a one-time code to pair the Chrome extension." },
+					{ fullValue: "unpair", label: "unpair", description: "Forget the paired Chrome extension." },
 					{ fullValue: "authorize", label: "authorize", description: "Allow this Pi session to use chrome_* tools." },
 					{ fullValue: "revoke", label: "revoke", description: "Lock Chrome control for this Pi session." },
 					{ fullValue: "status", label: "status", description: "One-line summary: connection, auth, and background setting." },
@@ -880,6 +1334,12 @@ Usage rules:
 					{ fullValue: "authorize 15m", label: "15m", description: "Authorize Chrome control for 15 minutes." },
 					{ fullValue: "authorize 30m", label: "30m", description: "Authorize Chrome control for 30 minutes." },
 					{ fullValue: "authorize indefinite", label: "indefinite", description: "Authorize Chrome control until revoked or Pi exits." },
+				];
+			} else if (path[0] === "server" && path.length === 1) {
+				candidates = [
+					{ fullValue: "server start", label: "start", description: "Start the local bridge server." },
+					{ fullValue: "server stop", label: "stop", description: "Stop the local bridge server." },
+					{ fullValue: "server status", label: "status", description: "Show whether the bridge server is running." },
 				];
 			} else if (path[0] === "background" && path.length === 1) {
 				candidates = [
@@ -903,6 +1363,9 @@ Usage rules:
 			const [head, ...rest] = tokens;
 			const subArgs = rest.join(" ");
 			switch (head) {
+				case "server": return serverHandler(ctx, subArgs);
+				case "pair": return pairHandler(ctx);
+				case "unpair": return unpairHandler(ctx);
 				case "authorize": return authorizeHandler(ctx, subArgs);
 				case "revoke": return revokeHandler(ctx);
 				case "status": return statusHandler(ctx);
@@ -918,7 +1381,7 @@ Usage rules:
 					return;
 				}
 				default:
-					ctx.ui.notify(`Unknown subcommand '${head}'. Try: /chrome authorize | revoke | status | doctor | onboard | background.`, "warning");
+					ctx.ui.notify(`Unknown subcommand '${head}'. Try: /chrome server | pair | unpair | authorize | revoke | status | doctor | onboard | background.`, "warning");
 			}
 		},
 	});
@@ -941,6 +1404,7 @@ Usage rules:
 			headless: Type.Optional(Type.Boolean({ description: "Ignored." })),
 		}),
 		async execute(_id, params, signal, _onUpdate, ctx): Promise<ToolTextResult> {
+			await bridge.start();
 			if (params.url && bridge.connected) {
 				const result = await authorizedBridgeSend("tab.new", { url: params.url }, DEFAULT_TIMEOUT_MS, signal);
 				return { content: [{ type: "text", text: `Chrome bridge connected; opened ${params.url}` }], details: { status: bridge.status(), result } };
@@ -955,8 +1419,9 @@ Usage rules:
 							`1. Open chrome://extensions in the Chrome profile you normally use.\n` +
 							`2. Enable Developer mode.\n` +
 							`3. Click “Load unpacked”.\n` +
-							`4. Select: ${browserExtensionPath()}\n\n` +
-							`Status: ${bridge.connected ? "connected" : "waiting for extension"}.`,
+							`4. Select: ${browserExtensionPath()}\n` +
+							`5. Run /chrome pair and enter the code in the extension popup.\n\n` +
+							`Status: ${bridge.connected ? "connected" : "waiting for paired extension"}.`,
 					},
 				],
 				details: { status: bridge.status(), extensionPath: browserExtensionPath() },
@@ -980,7 +1445,12 @@ Usage rules:
 			const result = await authorizedBridgeSend(`tab.${params.action}`, params, DEFAULT_TIMEOUT_MS, signal);
 			if (params.action === "list") {
 				const tabs = result as Array<{ id: number; title: string; url: string; active: boolean; windowId: number }>;
-				const text = tabs.map((tab) => `${tab.id}\t${tab.active ? "*" : " "}\t${tab.title || "(untitled)"}\t${tab.url}`).join("\n") || "No tabs.";
+				const rows = tabs.map((tab) =>
+					`targetId=${tab.id}\tactive=${tab.active ? "yes" : "no"}\twindowId=${tab.windowId}\ttitle=${tab.title || "(untitled)"}\turl=${tab.url}`,
+				);
+				const text = rows.length
+					? `Chrome tabs. Use the targetId value with other chrome_* tools to act on a specific tab.\n${rows.join("\n")}`
+					: "No tabs.";
 				return { content: [{ type: "text", text }], details: { tabs } };
 			}
 			return { content: [{ type: "text", text: safeJson(result) }], details: { result: result as Json } };
