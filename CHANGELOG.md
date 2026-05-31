@@ -9,6 +9,7 @@ All notable user-facing changes to `pi-chrome`.
 - **Request size limits.** Bridge JSON request bodies are capped to reduce local memory-pressure risk.
 - **Strict-CSP snapshots.** `chrome_snapshot` now runs from a packaged extension script instead of reconstructing itself with the page `Function` constructor, so pages that block `'unsafe-eval'` no longer break snapshots.
 - **Snapshot ergonomics.** `chrome_snapshot` now defaults to a concise observation and supports structural layout/context, `mode` (`interactive`, `forms`, `pageMap`, `text`, `changes`, `full`), `query`, page hints, form/action summaries, and since-last-snapshot diffs to avoid giant truncated dumps. Added `chrome_find` for query-first search and `chrome_inspect` for deep context around one uid/selector; `chrome_inspect` falls back to a nearby snapshot if the loaded Chrome extension has not been reloaded yet.
+- **Snapshot/security cleanup.** Sensitive input values are redacted from snapshots/inspect output, network capture is explicit-command and metadata-only by default, `chrome_inspect` no longer scrolls unless requested, query matching searches beyond the displayed element cap, new Chrome tools are included in activation bookkeeping, and stale duplicate snapshot code was removed.
 
 ## 0.15.26 — 2026-05-16
 

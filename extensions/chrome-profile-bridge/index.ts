@@ -105,7 +105,7 @@ function formatChromeSnapshot(snapshot: any): string {
 		lines.push(`\n## Matches for "${snapshot.query}"`);
 		for (const match of snapshot.matches.slice(0, 12)) {
 			if (match.kind === "text") lines.push(`- ${match.uid} text ${compactLine(match.text)} @ ${rectText(match.rect)}`);
-			else if (match.kind === "region") lines.push(`- ${match.uid} region:${match.kind} ${compactLine(match.label)} headings=${(match.headings || []).map((h: string) => compactLine(h, 50)).join(" | ")}`);
+			else if (match.kind === "region") lines.push(`- ${match.uid} region ${compactLine(match.label)} headings=${(match.headings || []).map((h: string) => compactLine(h, 50)).join(" | ")}`);
 			else lines.push(`- ${match.uid} ${match.role || match.tag || "element"}${match.disabled ? " disabled" : ""} ${compactLine(match.label || match.selector)} @ ${rectText(match.rect)}`);
 		}
 	}
@@ -138,6 +138,7 @@ function formatChromeSnapshot(snapshot: any): string {
 		for (const field of fields.slice(0, snapshot.mode === "forms" ? 40 : 12)) {
 			const bits = [field.uid, field.role || field.tag, field.required ? "required" : "", field.invalid ? "invalid" : "", field.disabled ? "disabled" : "", compactLine(field.label || field.selector, 90)];
 			if (field.value) bits.push(`value=${compactLine(field.value, 50)}`);
+			else if (field.valueRedacted) bits.push("value=[redacted]");
 			lines.push(`- ${bits.filter(Boolean).join(" ")} @ ${rectText(field.rect)}`);
 		}
 		for (const submit of submits.slice(0, 8)) lines.push(`- ${submit.uid} submit/action${submit.disabled ? " disabled" : ""} ${compactLine(submit.label || submit.selector)} @ ${rectText(submit.rect)}`);
@@ -185,7 +186,7 @@ function formatChromeInspect(inspect: any): string {
 	}
 	if (inspect.formContext) {
 		lines.push("\n## Form context");
-		for (const field of (inspect.formContext.fields || []).slice(0, 20)) lines.push(`- ${field.uid} ${field.role || field.tag}${field.disabled ? " disabled" : ""} ${compactLine(field.label || field.selector)}${field.value ? ` value=${compactLine(field.value, 60)}` : ""}`);
+		for (const field of (inspect.formContext.fields || []).slice(0, 20)) lines.push(`- ${field.uid} ${field.role || field.tag}${field.disabled ? " disabled" : ""} ${compactLine(field.label || field.selector)}${field.value ? ` value=${compactLine(field.value, 60)}` : field.valueRedacted ? " value=[redacted]" : ""}`);
 		for (const action of (inspect.formContext.actions || []).slice(0, 10)) lines.push(`- ${action.uid} action${action.disabled ? " disabled" : ""} ${compactLine(action.label || action.selector)}`);
 	}
 	if (Array.isArray(inspect.nearbyActions) && inspect.nearbyActions.length) {
@@ -955,10 +956,13 @@ class ChromeProfileBridge {
 const tabActionValues = ["list", "new", "activate", "close", "version"] as const;
 const imageFormatValues = ["png", "jpeg"] as const;
 const waitForValues = ["selector", "expression"] as const;
+const snapshotModeValues = ["auto", "interactive", "forms", "pageMap", "text", "changes", "full"] as const;
 const CHROME_TOOL_NAMES = [
 	"chrome_launch",
 	"chrome_tab",
 	"chrome_snapshot",
+	"chrome_find",
+	"chrome_inspect",
 	"chrome_navigate",
 	"chrome_evaluate",
 	"chrome_click",
@@ -1596,7 +1600,7 @@ Usage rules:
 			urlIncludes: Type.Optional(Type.String()),
 			titleIncludes: Type.Optional(Type.String()),
 			maxElements: Type.Optional(Type.Number({ default: MAX_ELEMENTS })),
-			mode: Type.Optional(Type.String({ description: "Observation mode: auto (concise default), interactive (actions only), forms, pageMap, text, changes, or full (raw JSON-style snapshot)." })),
+			mode: Type.Optional(StringEnum(snapshotModeValues)),
 			query: Type.Optional(Type.String({ description: "Find/rank elements, regions, and text matching this phrase, e.g. 'merge button', 'email error', 'approve PR'." })),
 			maxTextChars: Type.Optional(Type.Number({ description: "Max body text chars included in the underlying snapshot. Defaults are smaller for concise modes." })),
 			containingText: Type.Optional(Type.String({ description: "Only return elements whose label/text contains this string (case-insensitive). Useful when the page has many controls." })),
@@ -1627,7 +1631,7 @@ Usage rules:
 		promptSnippet: "Find matching controls/text/regions in Chrome by natural-language query and return stable uids.",
 		parameters: Type.Object({
 			query: Type.String({ description: "What to find, e.g. 'merge button', 'email error', 'approve PR', 'search box'." }),
-			mode: Type.Optional(Type.String({ description: "Optional snapshot mode to combine with query: auto, interactive, forms, pageMap, text." })),
+			mode: Type.Optional(StringEnum(snapshotModeValues)),
 			maxElements: Type.Optional(Type.Number({ default: MAX_ELEMENTS })),
 			targetId: Type.Optional(Type.String()),
 			urlIncludes: Type.Optional(Type.String()),
@@ -1658,6 +1662,7 @@ Usage rules:
 		parameters: Type.Object({
 			uid: Type.Optional(Type.String({ description: "Stable element uid from chrome_snapshot/chrome_find." })),
 			selector: Type.Optional(Type.String({ description: "CSS selector if uid is unavailable." })),
+			scrollIntoView: Type.Optional(Type.Boolean({ description: "If true, scroll the target into view before inspecting. Default false to avoid changing page state." })),
 			targetId: Type.Optional(Type.String()),
 			urlIncludes: Type.Optional(Type.String()),
 			titleIncludes: Type.Optional(Type.String()),
@@ -1930,8 +1935,8 @@ Usage rules:
 		name: "chrome_list_network_requests",
 		label: "Chrome Network Requests",
 		description:
-			"List fetch/XMLHttpRequest activity captured in the page by the companion extension. Capture starts after instrumentation is installed by snapshot/evaluate/network/console tools; browser document/static asset requests are not captured. Use includePreservedRequests=true to keep requests from earlier same-tab navigations that were captured before navigation.",
-		promptSnippet: "List captured XHR/fetch requests from the active Chrome page before doing DOM-heavy debugging.",
+			"List fetch/XMLHttpRequest metadata captured in the page by the companion extension. Capture starts after instrumentation is installed by snapshot/evaluate/network/console tools; browser document/static asset requests and response bodies are not captured. Use includePreservedRequests=true to keep requests from earlier same-tab navigations that were captured before navigation.",
+		promptSnippet: "List captured XHR/fetch metadata from the active Chrome page before doing DOM-heavy debugging.",
 		parameters: Type.Object({
 			includePreservedRequests: Type.Optional(Type.Boolean({ description: "Include captured requests from earlier locations in the same tab/session." })),
 			clear: Type.Optional(Type.Boolean({ description: "Clear the captured request log after reading." })),
@@ -1951,8 +1956,8 @@ Usage rules:
 	pi.registerTool({
 		name: "chrome_get_network_request",
 		label: "Chrome Network Request",
-		description: "Retrieve one captured fetch/XMLHttpRequest entry, including response body when available, by requestId from chrome_list_network_requests.",
-		promptSnippet: "Fetch captured request details and response body by requestId.",
+		description: "Retrieve one captured fetch/XMLHttpRequest metadata entry by requestId from chrome_list_network_requests. Response body capture is disabled by default to avoid leaking sensitive data.",
+		promptSnippet: "Fetch captured request metadata by requestId.",
 		parameters: Type.Object({
 			requestId: Type.String({ description: "Request id returned by chrome_list_network_requests." }),
 			targetId: Type.Optional(Type.String()),

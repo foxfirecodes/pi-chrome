@@ -70,7 +70,6 @@
       element.getAttribute("placeholder") ||
       wrappingLabel?.innerText ||
       element.innerText ||
-      element.value ||
       element.textContent ||
       ""
     ).trim().replace(/\s+/g, " ").slice(0, 180);
@@ -96,6 +95,24 @@
     if (element.isContentEditable) return "textbox";
     if (tag.match(/^h[1-6]$/)) return "heading";
     return tag;
+  }
+
+  function isSensitiveField(element) {
+    if (!element) return false;
+    const tag = element.tagName?.toLowerCase?.() || "";
+    if (!/^(input|textarea|select)$/.test(tag) && !element.isContentEditable) return false;
+    const type = (element.getAttribute("type") || "").toLowerCase();
+    if (["password"].includes(type)) return true;
+    const haystack = [
+      type,
+      element.getAttribute("name"),
+      element.id,
+      element.getAttribute("autocomplete"),
+      element.getAttribute("aria-label"),
+      element.getAttribute("placeholder"),
+      element.getAttribute("data-testid"),
+    ].filter(Boolean).join(" ").toLowerCase();
+    return /password|passwd|\bpwd\b|secret|token|bearer|api[-_ ]?key|access[-_ ]?key|auth[-_ ]?code|one[-_ ]?time|otp|2fa|mfa|verification[-_ ]?code|recovery[-_ ]?code|credit[-_ ]?card|card[-_ ]?number|cc-number|cc-csc|cvc|cvv|security[-_ ]?code|ssn|social[-_ ]?security/.test(haystack);
   }
 
   function installPiChromeInstrumentation() {
@@ -133,7 +150,6 @@
     window.addEventListener("error", (event) => pushConsole("pageerror", [event.message, event.filename + ":" + event.lineno + ":" + event.colno]));
     window.addEventListener("unhandledrejection", (event) => pushConsole("unhandledrejection", [event.reason]));
 
-    const trimBody = (text) => typeof text === "string" && text.length > 200000 ? text.slice(0, 200000) + `\n[truncated ${text.length - 200000} chars]` : text;
     const record = (entry) => {
       state.network.push(entry);
       if (state.network.length > 1000) state.network.splice(0, state.network.length - 1000);
@@ -157,10 +173,7 @@
           entry.responseUrl = response.url;
           entry.durationMs = Date.now() - startedAt;
           entry.responseHeaders = Array.from(response.headers.entries());
-          response.clone().text().then((text) => {
-            entry.responseBody = trimBody(text);
-            entry.responseBodyTruncated = typeof text === "string" && text.length > 200000;
-          }).catch((error) => { entry.responseBodyError = error?.message || String(error); });
+          entry.responseBodyOmitted = "response body capture is disabled by default";
           return response;
         } catch (error) {
           entry.error = error?.message || String(error);
@@ -190,12 +203,7 @@
           entry.responseUrl = this.responseURL;
           entry.durationMs = Date.now() - startedAt;
           try { entry.responseHeadersText = this.getAllResponseHeaders(); } catch {}
-          try {
-            if (typeof this.responseText === "string") {
-              entry.responseBody = trimBody(this.responseText);
-              entry.responseBodyTruncated = this.responseText.length > 200000;
-            }
-          } catch (error) { entry.responseBodyError = error?.message || String(error); }
+          entry.responseBodyOmitted = "response body capture is disabled by default";
         });
         this.addEventListener("error", () => { entry.error = "XMLHttpRequest error"; entry.durationMs = Date.now() - startedAt; });
         return originalSend.call(this, body);
@@ -290,7 +298,9 @@
     const occluded = occluderAt(cx, cy, element);
     const role = roleOf(element);
     const disabled = Boolean(element.disabled || element.getAttribute("aria-disabled") === "true");
-    const value = "value" in element && typeof element.value === "string" ? element.value.slice(0, 120) : undefined;
+    const rawValue = "value" in element && typeof element.value === "string" ? element.value : undefined;
+    const sensitive = isSensitiveField(element);
+    const value = rawValue && !sensitive ? rawValue.slice(0, 120) : undefined;
     const checked = "checked" in element ? Boolean(element.checked) : undefined;
     return {
       index,
@@ -302,6 +312,9 @@
       href: element.href || undefined,
       type: element.getAttribute("type") || undefined,
       value: value || undefined,
+      hasValue: rawValue ? rawValue.length > 0 : undefined,
+      valueLength: rawValue && sensitive ? rawValue.length : undefined,
+      valueRedacted: sensitive && rawValue ? true : undefined,
       checked,
       disabled,
       inert: Boolean(element.closest?.("[inert]")),
@@ -508,7 +521,7 @@
 
   function snapshotPage(maxElements, containingText, roleFilter, nearUid, mode, query, maxTextChars) {
     installPiChromeInstrumentation();
-    mode = mode || "auto";
+    mode = ["auto", "interactive", "forms", "pageMap", "text", "changes", "full"].includes(mode) ? mode : "auto";
     const fullTextLimit = Number(maxTextChars || (mode === "full" ? 30000 : mode === "text" ? 18000 : 6000));
     let candidates = Array.from(document.querySelectorAll('a, button, input, textarea, select, summary, [role="button"], [role="link"], [role="menuitem"], [role="tab"], [role="checkbox"], [contenteditable="true"], [tabindex]:not([tabindex="-1"])'));
     if (containingText) {
@@ -541,7 +554,11 @@
         return avis - bvis || ar.top - br.top || ar.left - br.left;
       });
     }
-    const elements = candidates.filter(isElementVisible).slice(0, maxElements).map((element, index) => summarizeElement(element, index));
+    const visibleCandidates = candidates.filter(isElementVisible);
+    const elements = visibleCandidates.slice(0, maxElements).map((element, index) => summarizeElement(element, index));
+    const queryElements = query
+      ? visibleCandidates.slice(0, Math.max(maxElements, 500)).map((element, index) => summarizeElement(element, index))
+      : elements;
     const map = pageMap();
     const forms = formSummaries();
     const layout = layoutSections(elements, forms);
@@ -559,6 +576,7 @@
         visibleText: textOf(document.body, 500),
         visibleInteractiveCount: elements.filter((el) => el.rect.y >= 0 && el.rect.y <= innerHeight).length,
         totalInteractiveSampled: elements.length,
+        totalInteractiveVisible: visibleCandidates.length,
         focused: focused ? { uid: focused.uid, role: focused.role, label: focused.label } : undefined,
         modal: modal ? { uid: modal.uid, label: modal.label } : undefined,
         hints: [],
@@ -572,7 +590,7 @@
       forms,
       layout,
       pageMap: map,
-      matches: queryMatches(query, elements, map),
+      matches: queryMatches(query, queryElements, map),
       filter: { containingText: containingText || undefined, roleFilter: roleFilter || undefined, nearUid: nearUid || undefined },
     };
     if (snapshot.modal) snapshot.summary.hints.push("A modal/dialog is visible; interact with it before the underlying page.");
@@ -614,14 +632,14 @@
     return snapshot;
   }
 
-  function inspectTarget(uid, selector) {
+  function inspectTarget(uid, selector, shouldScrollIntoView) {
     installPiChromeInstrumentation();
     const state = getPiChromeState();
     let element = null;
     if (uid) element = state.elements[uid];
     if (!element && selector) element = document.querySelector(selector);
     if (!element || !element.isConnected) throw new Error(uid ? `No live element for uid: ${uid}. Take a fresh chrome_snapshot.` : `No element matches selector: ${selector}`);
-    element.scrollIntoView?.({ block: "center", inline: "center", behavior: "instant" });
+    if (shouldScrollIntoView) element.scrollIntoView?.({ block: "center", inline: "center", behavior: "instant" });
     const summary = summarizeElement(element, 0);
     const ancestors = [];
     let current = element.parentElement;

@@ -110,7 +110,7 @@ You:    [files the ticket with the folder attached]
 > Open my analytics dashboard tab and pull today's KPIs from the page.
 
 **Network forensics**
-> Reproduce the checkout bug, find the failing API call, and dump its response body.
+> Reproduce the checkout bug and identify the failing XHR/fetch request metadata.
 
 **File upload through React**
 > Open the photo uploader, upload `./fixtures/sample.png`, confirm the preview renders.
@@ -145,7 +145,7 @@ Agents can verify page state immediately instead of blindly retrying.
 | **Interact**    | `chrome_click`, `chrome_type`, `chrome_fill`, `chrome_key`, `chrome_hover`                     |
 | **Gesture**     | `chrome_drag` (Chrome pointer drag), `chrome_scroll` (wheel + momentum), `chrome_tap` (touch)  |
 | **Files**       | `chrome_upload_file` (Chrome file-input control; no native picker)                             |
-| **Observe**     | `chrome_list_console_messages`, `chrome_list_network_requests`, `chrome_get_network_request` (with response body) |
+| **Observe**     | `chrome_list_console_messages`, `chrome_list_network_requests`, `chrome_get_network_request` (metadata; response bodies omitted by default) |
 
 Each tool is documented inline in Pi — agents see the parameters and gotchas (Chrome input, CSP limits, file upload behavior) without trial-and-error. `chrome_snapshot` defaults to a concise observation with structural layout/context around controls; use `query`, `mode: "forms"`, `"interactive"`, `"pageMap"`, `"text"`, `"changes"`, or `"full"` to zoom into the page without fighting truncation. `chrome_find` is a query-first shortcut, and `chrome_inspect` expands one uid into nearby text/actions/form context.
 
